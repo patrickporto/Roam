@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist-electron/
+
+# Lock files
+pnpm-lock.yaml
+package-lock.json
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+
+# OpenCode
+.opencode/
