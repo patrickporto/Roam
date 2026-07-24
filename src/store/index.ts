@@ -38,7 +38,7 @@ interface AppState {
   selectedRoot: string | null;
   selectProfile: (rootPath: string | null) => void;
   profileMedia: MediaItem[];
-  profileCursor: string | null;
+  profileCursor: string | null | undefined;
   appendProfileMedia: (page: FeedPage) => void;
   clearProfileMedia: () => void;
 }
@@ -70,8 +70,10 @@ export const useStore = create<AppState>((set) => ({
     }),
   clearFeed: () =>
     set({ feedItems: [], feedCursor: undefined, feedTrimOffset: 0, feedLoading: false }),
-  refreshFeed: () =>
-    set({ feedItems: [], feedCursor: undefined, feedTrimOffset: 0, feedLoading: false }),
+  refreshFeed: () => {
+    getApi().feed.resetSession().catch(() => {});
+    set({ feedItems: [], feedCursor: undefined, feedTrimOffset: 0, feedLoading: false });
+  },
   setFeedLoading: (v) => set({ feedLoading: v }),
 
   profiles: [],
@@ -108,16 +110,16 @@ export const useStore = create<AppState>((set) => ({
         ? useStore.getState().profileMap.get(profilePath) ?? null
         : null,
       profileMedia: [],
-      profileCursor: null,
+      profileCursor: undefined,
     }),
   profileMedia: [],
-  profileCursor: null,
+  profileCursor: undefined,
   appendProfileMedia: (page) =>
     set((s) => ({
       profileMedia: [...s.profileMedia, ...page.items],
       profileCursor: page.nextCursor,
     })),
-  clearProfileMedia: () => set({ profileMedia: [], profileCursor: null }),
+  clearProfileMedia: () => set({ profileMedia: [], profileCursor: undefined }),
 }));
 
 // ── Hooks ────────────────────────────────────────────────────────────────────
@@ -210,13 +212,11 @@ export function useProfileMedia(
 
   const loadNextPage = useCallback(async () => {
     if (!profilePath && !albumPath) return;
-    if (loading) return;
+    if (profileCursor === null || loading) return;
     setLoading(true);
     try {
       const scope = { profilePath: profilePath ?? undefined, albumPath: albumPath ?? undefined };
-      console.log('[useProfileMedia] loadNextPage', { scope, cursor: profileCursor, order });
       const page = await getApi().library.listMedia(scope, profileCursor ?? undefined, order);
-      console.log('[useProfileMedia] page', { itemCount: page.items?.length, nextCursor: page.nextCursor });
       appendProfileMedia(page);
     } catch (e) {
       console.error('[useProfileMedia] Failed to load profile media', e);
