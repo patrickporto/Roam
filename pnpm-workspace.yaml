@@ -1,0 +1,8 @@
+allowBuilds:
+  better-sqlite3: set this to true or false
+  electron: set this to true or false
+  esbuild: set this to true or false
+  lzma-native: set this to true or false
+minimumReleaseAgeExclude:
+  - '@tanstack/react-virtual@3.14.8'
+  - '@tanstack/virtual-core@3.17.6'

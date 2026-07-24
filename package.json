@@ -1,0 +1,34 @@
+{
+  "name": "roam",
+  "version": "0.1.0",
+  "description": "Explorador de midia local imersivo estilo TikTok para Windows",
+  "main": "dist-electron/electron/main.js",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently -k \"vite\" \"wait-on http://localhost:5173 && tsc -p tsconfig.electron.json && electron . --dev\"",
+    "build": "tsc -p tsconfig.electron.json && vite build",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.electron.json",
+    "test": "vitest run",
+    "postinstall": "electron-rebuild -f -w better-sqlite3 || true"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.0",
+    "electron": "^33.4.11",
+    "electron-rebuild": "^3.2.9",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11",
+    "vitest": "^2.1.5",
+    "wait-on": "^8.0.1"
+  },
+  "dependencies": {
+    "@tanstack/react-virtual": "^3.14.8",
+    "better-sqlite3": "^11.6.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "zustand": "^5.0.1"
+  }
+}
