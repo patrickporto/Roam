@@ -1,0 +1,15 @@
+appId: roam.desktop
+productName: Roam
+directories:
+  output: dist
+  buildResources: build
+files:
+  - dist-electron/**/*
+  - dist/**/*
+  - package.json
+win:
+  target:
+    - target: portable
+      arch:
+        - x64
+  artifactName: ${productName}-${version}-portable.exe
