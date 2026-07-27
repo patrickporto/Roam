@@ -7,8 +7,8 @@ interface FeedViewProps {
   scope: 'forYou' | 'profile';
   items?: MediaItem[];
   loadNext?: () => Promise<void>;
-  /** Índice inicial (navegação a partir de grade). */
-  initialIndex?: number;
+  /** Item inicial (navegação a partir de grade). */
+  initialItem?: MediaItem | null;
 }
 
 /** Raio da janela de renderização do DOM ao redor do item ativo. */
@@ -18,7 +18,7 @@ export function FeedView({
   scope,
   items: externalItems,
   loadNext: externalLoad,
-  initialIndex = 0,
+  initialItem = null,
 }: FeedViewProps) {
   const { feedItems, loadNextPage: loadForYou, feedLoading } = useFeed();
   const feedTrimOffset = useStore((s) => s.feedTrimOffset);
@@ -30,6 +30,7 @@ export function FeedView({
   const containerRef = useRef<HTMLDivElement>(null);
   const fetchingRef = useRef(false);
   const didInitRef = useRef(false);
+  const initItemRef = useRef<string | null>(null);
   const prevTrimRef = useRef(0);
   const isScrollingRef = useRef(false);
   const scrollEndTimer = useRef<number | undefined>(undefined);
@@ -79,16 +80,40 @@ export function FeedView({
 
   // salto inicial (navegação a partir de grade)
   useEffect(() => {
-    if (didInitRef.current || items.length === 0 || vh === 0) return;
-    didInitRef.current = true;
+    if (items.length === 0) return;
     const el = containerRef.current;
     if (!el) return;
-    const idx = Math.min(initialIndex, Math.max(0, totalVirtual - 1));
-    activeIdxRef.current = idx;
-    setActiveIdx(idx);
-    el.scrollTop = idx * vh;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [items.length > 0, vh]);
+
+    const currentInit = initialItem?.path ?? null;
+    if (initItemRef.current === currentInit && didInitRef.current) return;
+
+    const realVh = el.clientHeight > 0 ? el.clientHeight : vh;
+    if (realVh === 0) return; // esperar layout pronto
+
+    initItemRef.current = currentInit;
+    didInitRef.current = true;
+
+    // Defer index calc + scroll to next frame so trimOffset/items are stable
+    requestAnimationFrame(() => {
+      const container = containerRef.current;
+      if (!container) return;
+
+      const vhNow = container.clientHeight > 0 ? container.clientHeight : vh;
+      if (vhNow === 0) return;
+
+      const total = trimOffset + items.length;
+      let idx = 0;
+      if (initialItem) {
+        idx = items.findIndex((m) => m.path === initialItem.path);
+        if (idx < 0) idx = 0;
+      }
+      idx = Math.min(idx, Math.max(0, total - 1));
+
+      activeIdxRef.current = idx;
+      setActiveIdx(idx);
+      container.scrollTop = idx * vhNow;
+    });
+  }, [items.length > 0, vh, initialItem, trimOffset]);
 
   // compensação de scroll quando a janela deslizante descarta itens antigos
   useEffect(() => {
@@ -130,18 +155,19 @@ export function FeedView({
       const el = containerRef.current;
       if (!el) return;
       if (isScrollingRef.current) return; // ignore se já está rolando
+      const realVh = el.clientHeight > 0 ? el.clientHeight : vh;
       if (e.key === 'ArrowDown' || e.key === 'PageDown') {
         e.preventDefault();
         const next = Math.min(activeIdxRef.current + 1, totalVirtual - 1);
         activeIdxRef.current = next;
         setActiveIdx(next);
-        el.scrollTop = next * vh;
+        el.scrollTop = next * realVh;
       } else if (e.key === 'ArrowUp' || e.key === 'PageUp') {
         e.preventDefault();
         const prev = Math.max(0, activeIdxRef.current - 1);
         activeIdxRef.current = prev;
         setActiveIdx(prev);
-        el.scrollTop = prev * vh;
+        el.scrollTop = prev * realVh;
       }
     };
     window.addEventListener('keydown', onKey);

@@ -14,7 +14,7 @@ export function FavoritesPage() {
   const [cursor, setCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [mode, setMode] = useState<'grid' | 'feed'>('grid');
-  const [startIdx, setStartIdx] = useState(0);
+  const [startItem, setStartItem] = useState<MediaItem | null>(null);
 
   const loadMore = async (cur?: string) => {
     if (loading) return;
@@ -39,7 +39,7 @@ export function FavoritesPage() {
         <button className="back-btn float" onClick={() => setMode('grid')}>
           ←
         </button>
-        <FeedView scope="profile" items={items} initialIndex={startIdx} />
+        <FeedView scope="profile" items={items} initialItem={startItem} />
       </div>
     );
   }
@@ -86,8 +86,8 @@ export function FavoritesPage() {
       ) : (
         <MediaGrid
           items={items}
-          onSelect={(i) => {
-            setStartIdx(i);
+          onSelect={(item) => {
+            setStartItem(item);
             setMode('feed');
           }}
           onReachEnd={() => cursor && loadMore(cursor)}

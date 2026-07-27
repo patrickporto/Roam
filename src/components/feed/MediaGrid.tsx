@@ -3,7 +3,7 @@ import type { MediaItem } from '../../shared/types';
 
 interface MediaGridProps {
   items: MediaItem[];
-  onSelect: (index: number) => void;
+  onSelect: (item: MediaItem) => void;
   onReachEnd?: () => void;
 }
 
@@ -52,11 +52,11 @@ export function MediaGrid({ items, onSelect, onReachEnd }: MediaGridProps) {
         }
       }}
     >
-      {uniqueItems.map((item, index) => (
+      {uniqueItems.map((item) => (
         <button
           key={item.path}
           className="media-tile"
-          onClick={() => onSelect(index)}
+          onClick={() => onSelect(item)}
           title={item.name}
         >
           {item.type === 'image' ? (

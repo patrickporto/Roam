@@ -4,7 +4,7 @@ import { getApi } from '../../api';
 import { FeedView } from '../feed/FeedView';
 import { MediaGrid } from '../feed/MediaGrid';
 import { AlbumGrid } from './AlbumGrid';
-import type { SortOrder } from '../../shared/types';
+import type { MediaItem, SortOrder } from '../../shared/types';
 
 interface ProfilePageProps {
   profilePath: string;
@@ -19,7 +19,7 @@ export function ProfilePage({ profilePath }: ProfilePageProps) {
   const [mode, setMode] = useState<'grid' | 'feed'>('grid');
   const [viewMode, setViewMode] = useState<'root' | 'albums'>('root');
   const [order, setOrder] = useState<SortOrder>('recommended');
-  const [startIdx, setStartIdx] = useState(0);
+  const [startItem, setStartItem] = useState<MediaItem | null>(null);
 
   const { profileMedia, loadNextPage, loading } = useProfileMedia(
     viewAlbum ? null : profilePath,
@@ -69,7 +69,7 @@ export function ProfilePage({ profilePath }: ProfilePageProps) {
           scope="profile"
           items={feedMedia}
           loadNext={loadNextPage}
-          initialIndex={startIdx}
+          initialItem={startItem}
         />
       </div>
     );
@@ -184,8 +184,8 @@ export function ProfilePage({ profilePath }: ProfilePageProps) {
           ) : (
             <MediaGrid
               items={rootMedia}
-              onSelect={(i) => {
-                setStartIdx(i);
+              onSelect={(item) => {
+                setStartItem(item);
                 setMode('feed');
               }}
               onReachEnd={() => loadNextPage()}
@@ -209,8 +209,8 @@ export function ProfilePage({ profilePath }: ProfilePageProps) {
           ) : (
             <MediaGrid
               items={rootMedia}
-              onSelect={(i) => {
-                setStartIdx(i);
+              onSelect={(item) => {
+                setStartItem(item);
                 setMode('feed');
               }}
               onReachEnd={() => loadNextPage()}
