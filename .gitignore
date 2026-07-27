@@ -6,7 +6,6 @@ dist-electron/
 
 # Lock files
 pnpm-lock.yaml
-package-lock.json
 
 # IDE
 .vscode/
