@@ -126,26 +126,44 @@ function scoreQuery(served: string[]): { path: string; modified_at: number }[] {
     ? ` AND path NOT IN (${served.map(() => '?').join(',')})`
     : '';
 
+  // Pool misto: TOP_K melhores por score + amostra aleatória dos demais.
+  // Sem a amostra aleatória, itens antigos/sem sinal de favorito nunca
+  // entrariam no pool (o LIMIT ficaria só com recents) e a cota de itens
+  // antigos do applyDiversity nunca seria preenchida.
+  const TOP_K = 80;
+
   const sql = `
-    SELECT
-      path,
-      modified_at,
-      profile_path,
-      album_path,
-      (
-        0.4 * (1.0 / (1.0 + (strftime('%s','now') * 1000.0 - modified_at) / 864000000.0))
-        + 0.3 * MIN(
-            (CASE WHEN profile_path IN ${favFoldersIn} THEN 1 ELSE 0 END)
-          + (CASE WHEN album_path IN ${favFoldersIn} THEN 1 ELSE 0 END)
-          + (CASE WHEN profile_path IN ${likedProfilesIn} THEN 0.5 ELSE 0 END)
-          + (CASE WHEN format IN ${likedFormatsIn} THEN 0.5 ELSE 0 END)
-          , 2.0) / 2.0
-        + (ABS(RANDOM()) % 10000) * 0.00005
-      ) AS score
-    FROM media_index
-    WHERE 1=1${servedIn}
-    ORDER BY score DESC
-    LIMIT ${CANDIDATE_POOL}`;
+    WITH scored AS (
+      SELECT
+        path,
+        modified_at,
+        profile_path,
+        album_path,
+        (
+          0.4 * (1.0 / (1.0 + (strftime('%s','now') * 1000.0 - modified_at) / 864000000.0))
+          + 0.3 * MIN(
+              (CASE WHEN profile_path IN ${favFoldersIn} THEN 1 ELSE 0 END)
+            + (CASE WHEN album_path IN ${favFoldersIn} THEN 1 ELSE 0 END)
+            + (CASE WHEN profile_path IN ${likedProfilesIn} THEN 0.5 ELSE 0 END)
+            + (CASE WHEN format IN ${likedFormatsIn} THEN 0.5 ELSE 0 END)
+            , 2.0) / 2.0
+          + (ABS(RANDOM()) % 10000) * 0.00005
+        ) AS score
+      FROM media_index
+      WHERE 1=1${servedIn}
+    ),
+    top AS (
+      SELECT * FROM scored ORDER BY score DESC LIMIT ${TOP_K}
+    ),
+    rest AS (
+      SELECT * FROM scored
+      WHERE path NOT IN (SELECT path FROM top)
+      ORDER BY ABS(RANDOM())
+      LIMIT ${CANDIDATE_POOL - TOP_K}
+    )
+    SELECT * FROM top
+    UNION ALL
+    SELECT * FROM rest`;
 
   const allParams = [
     ...fav.favFolders,
