@@ -86,17 +86,13 @@ export function FavoritesPage() {
       ) : (
         <MediaGrid
           items={items}
+          loading={loading}
           onSelect={(item) => {
             setStartItem(item);
             setMode('feed');
           }}
           onReachEnd={() => cursor && loadMore(cursor)}
         />
-      )}
-      {loading && (
-        <div className="loading-indicator" style={{ height: 80 }}>
-          <div className="spinner" />
-        </div>
       )}
     </div>
   );

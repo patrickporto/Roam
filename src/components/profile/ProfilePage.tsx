@@ -184,17 +184,13 @@ export function ProfilePage({ profilePath }: ProfilePageProps) {
           ) : (
             <MediaGrid
               items={rootMedia}
+              loading={loading}
               onSelect={(item) => {
                 setStartItem(item);
                 setMode('feed');
               }}
               onReachEnd={() => loadNextPage()}
             />
-          )}
-          {loading && (
-            <div className="loading-indicator" style={{ height: 80 }}>
-              <div className="spinner" />
-            </div>
           )}
         </div>
       )}
@@ -209,17 +205,13 @@ export function ProfilePage({ profilePath }: ProfilePageProps) {
           ) : (
             <MediaGrid
               items={rootMedia}
+              loading={loading}
               onSelect={(item) => {
                 setStartItem(item);
                 setMode('feed');
               }}
               onReachEnd={() => loadNextPage()}
             />
-          )}
-          {loading && (
-            <div className="loading-indicator" style={{ height: 80 }}>
-              <div className="spinner" />
-            </div>
           )}
         </div>
       )}

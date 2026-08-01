@@ -1,18 +1,53 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { MediaItem } from '../../shared/types';
 
 interface MediaGridProps {
   items: MediaItem[];
   onSelect: (item: MediaItem) => void;
   onReachEnd?: () => void;
+  loading?: boolean;
 }
 
-const isNearEnd = (el: HTMLElement) =>
-  el.scrollTop + el.clientHeight >= el.scrollHeight - 400;
+const SKELETON_COUNT = 8;
+
+/** Vídeo da grade: só recebe `src` quando se aproxima do viewport. */
+function TileVideo({ item }: { item: MediaItem }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [near, setNear] = useState(false);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          setNear(true);
+          io.disconnect();
+        }
+      },
+      { rootMargin: '400px' },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
+
+  return (
+    <div className="tile-video" ref={ref}>
+      {near && <video src={item.mediaUrl} muted preload="metadata" />}
+      <span className="tile-play">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
+          <polygon points="6 3 20 12 6 21 6 3" />
+        </svg>
+      </span>
+    </div>
+  );
+}
 
 /** Grade de miniaturas estilo TikTok (perfil/favoritos). */
-export function MediaGrid({ items, onSelect, onReachEnd }: MediaGridProps) {
-  const gridRef = useRef<HTMLDivElement>(null);
+export function MediaGrid({ items, onSelect, onReachEnd, loading = false }: MediaGridProps) {
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  const onReachEndRef = useRef(onReachEnd);
+  onReachEndRef.current = onReachEnd;
 
   const uniqueItems = useMemo(() => {
     const seen = new Set<string>();
@@ -23,35 +58,29 @@ export function MediaGrid({ items, onSelect, onReachEnd }: MediaGridProps) {
     });
   }, [items]);
 
-  // Check if already at the end after items change (e.g. after pagination load).
-  // This handles the case where content fits the viewport and no scroll occurs.
+  // Sentinela no fim da grade: dispara ao ficar visível, independente de
+  // qual ancestral é o container de scroll. O observer é recriado a cada
+  // página carregada — como o IO sempre emite um callback inicial ao
+  // observar, isso re-dispara enquanto o fim continuar visível (conteúdo
+  // menor que o viewport), até o cursor do backend se esgotar.
   useEffect(() => {
-    if (!onReachEnd) return;
-    const el = gridRef.current;
+    const el = sentinelRef.current;
     if (!el) return;
-
-    // Use requestAnimationFrame to wait for layout to settle after new items render
-    const raf = requestAnimationFrame(() => {
-      if (isNearEnd(el)) {
-        onReachEnd();
-      }
-    });
-    return () => cancelAnimationFrame(raf);
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          onReachEndRef.current?.();
+        }
+      },
+      { rootMargin: '600px' },
+    );
+    io.observe(el);
+    return () => io.disconnect();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [uniqueItems.length]);
 
   return (
-    <div
-      ref={gridRef}
-      className="media-grid"
-      onScroll={() => {
-        if (!onReachEnd) return;
-        const el = gridRef.current;
-        if (el && isNearEnd(el)) {
-          onReachEnd();
-        }
-      }}
-    >
+    <div className="media-grid">
       {uniqueItems.map((item) => (
         <button
           key={item.path}
@@ -60,20 +89,18 @@ export function MediaGrid({ items, onSelect, onReachEnd }: MediaGridProps) {
           title={item.name}
         >
           {item.type === 'image' ? (
-            <img src={item.mediaUrl} alt={item.name} loading="lazy" />
+            <img src={item.mediaUrl} alt={item.name} loading="lazy" decoding="async" />
           ) : (
-            <div className="tile-video">
-              <video src={item.mediaUrl} muted preload="metadata" />
-              <span className="tile-play">
-                <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
-                  <polygon points="6 3 20 12 6 21 6 3" />
-                </svg>
-              </span>
-            </div>
+            <TileVideo item={item} />
           )}
           <span className="tile-format">{item.format.toUpperCase()}</span>
         </button>
       ))}
+      {loading &&
+        Array.from({ length: SKELETON_COUNT }, (_, i) => (
+          <div key={`skeleton-${i}`} className="media-tile skeleton" />
+        ))}
+      <div ref={sentinelRef} className="grid-sentinel" />
     </div>
   );
 }
