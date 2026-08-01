@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { create } from 'zustand';
 import type { Profile, FeedPage, MediaItem, SortOrder } from '../shared/types';
 import { getApi } from '../api';
@@ -209,26 +209,40 @@ export function useProfileMedia(
   const profileCursor = useStore((s) => s.profileCursor);
   const appendProfileMedia = useStore((s) => s.appendProfileMedia);
   const [loading, setLoading] = useState(false);
+  // Época invalida respostas em voo quando o escopo muda (ou desmonta):
+  // sem isso, uma resposta atrasada do escopo anterior sobrescreve o cursor
+  // e a paginação do novo escopo pula itens.
+  const epochRef = useRef(0);
+  const fetchingRef = useRef(false);
 
   const loadNextPage = useCallback(async () => {
     if (!profilePath && !albumPath) return;
-    if (profileCursor === null || loading) return;
+    if (profileCursor === null || loading || fetchingRef.current) return;
+    fetchingRef.current = true;
     setLoading(true);
+    const epoch = epochRef.current;
     try {
       const scope = { profilePath: profilePath ?? undefined, albumPath: albumPath ?? undefined };
       const page = await getApi().library.listMedia(scope, profileCursor ?? undefined, order);
+      if (epoch !== epochRef.current) return; // escopo mudou durante o fetch
       appendProfileMedia(page);
     } catch (e) {
       console.error('[useProfileMedia] Failed to load profile media', e);
     } finally {
+      fetchingRef.current = false;
       setLoading(false);
     }
   }, [profilePath, albumPath, order, profileCursor, loading, appendProfileMedia]);
 
   useEffect(() => {
     // reset on scope/order change
+    epochRef.current++;
     useStore.getState().clearProfileMedia();
   }, [profilePath, albumPath, order]);
+
+  useEffect(() => () => {
+    epochRef.current++;
+  }, []);
 
   useEffect(() => {
     if (profileMedia.length === 0 && !loading) {
