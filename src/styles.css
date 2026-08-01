@@ -242,14 +242,14 @@ button {
 /* Slot individual: cada slot = 1 item do feed, no fluxo normal */
 .feed-slot {
   position: relative;
-  height: 100vh;
+  height: var(--feed-vh, 100vh);
   width: 100%;
   flex-shrink: 0;
 }
 
 /* Snap anchor: elemento invisível no fluxo do DOM que serve de alvo para o scroll-snap */
 .feed-snap-anchor {
-  height: 100vh;
+  height: var(--feed-vh, 100vh);
   width: 100%;
   scroll-snap-align: start;
   scroll-snap-stop: always;
@@ -272,7 +272,7 @@ button {
 
 /* Loading indicator posicionado no final do feed virtual */
 .feed-loading {
-  height: 100vh;
+  height: var(--feed-vh, 100vh);
   width: 100%;
   display: flex;
   align-items: center;

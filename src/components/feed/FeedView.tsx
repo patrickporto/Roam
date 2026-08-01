@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback, useState } from 'react';
+import { useEffect, useRef, useCallback, useState, type CSSProperties } from 'react';
 import { useFeed, useFavorites, useStore } from '../../store';
 import { MediaCard } from './MediaCard';
 import type { MediaItem } from '../../shared/types';
@@ -69,13 +69,9 @@ export function FeedView({
       const el = containerRef.current;
       if (el && el.clientHeight > 0) setVh(el.clientHeight);
     };
-    // Defer measurement to after paint to avoid reading 0 on mount
-    const raf = requestAnimationFrame(() => {
-      measure();
-      window.addEventListener('resize', measure);
-      return () => window.removeEventListener('resize', measure);
-    });
-    return () => cancelAnimationFrame(raf);
+    measure();
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
   }, []);
 
   // salto inicial (navegação a partir de grade)
@@ -111,7 +107,14 @@ export function FeedView({
 
       activeIdxRef.current = idx;
       setActiveIdx(idx);
+      // Salto instantâneo: desativa snap/smooth para não parar em anchors intermediários
+      container.style.scrollSnapType = 'none';
+      container.style.scrollBehavior = 'auto';
       container.scrollTop = idx * vhNow;
+      requestAnimationFrame(() => {
+        container.style.scrollSnapType = '';
+        container.style.scrollBehavior = '';
+      });
     });
   }, [items.length > 0, vh, initialItem, trimOffset]);
 
@@ -238,7 +241,12 @@ export function FeedView({
   const slotEnd = Math.min(totalVirtual, activeIdx + scrollMargin + 1);
 
   return (
-    <div className="feed-view" ref={containerRef} onScroll={handleScroll}>
+    <div
+      className="feed-view"
+      ref={containerRef}
+      onScroll={handleScroll}
+      style={{ '--feed-vh': `${vh}px` } as CSSProperties}
+    >
       {isForYou && (
         <button className="feed-refresh-btn" onClick={handleRefresh} title="Atualizar feed">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 2v6h-6" /><path d="M3 12a9 9 0 0 1 15-6.7L21 8" /><path d="M3 22v-6h6" /><path d="M21 12a9 9 0 0 1-15 6.7L3 16" /></svg>
