@@ -597,6 +597,46 @@ video.media-el {
 .profile-list-wrap {
   height: 100%;
   padding-top: calc(var(--titlebar-h) + 12px);
+  display: flex;
+  flex-direction: column;
+}
+
+.profile-toolbar {
+  display: flex;
+  gap: 12px;
+  padding: 0 20px 12px;
+  align-items: center;
+}
+
+.profile-search {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-primary);
+  padding: 8px 12px;
+  font-size: 14px;
+  outline: none;
+}
+
+.profile-search:focus {
+  border-color: var(--accent);
+}
+
+.profile-sort {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-primary);
+  padding: 8px 12px;
+  font-size: 14px;
+  cursor: pointer;
+  outline: none;
+}
+
+.profile-sort:focus {
+  border-color: var(--accent);
 }
 
 .profile-list {

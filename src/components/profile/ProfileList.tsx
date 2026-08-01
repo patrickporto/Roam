@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, useRef, useMemo } from 'react';
+import { memo, useCallback, useEffect, useState, useRef, useMemo } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useStore, useFavorites } from '../../store';
 import { getApi } from '../../api';
@@ -15,6 +15,76 @@ interface MenuState {
   profile: Profile;
 }
 
+type ProfileSort = 'name-asc' | 'name-desc' | 'modified-desc' | 'modified-asc';
+
+const nameCollator = new Intl.Collator('pt-BR', { sensitivity: 'base' });
+
+interface ProfileRowProps {
+  rowProfiles: (Profile | null)[];
+  start: number;
+  favFolders: Set<string>;
+  onContextMenu: (e: React.MouseEvent, profile: Profile) => void;
+  onToggleFavorite: (profilePath: string) => void;
+  onProfileClick: (profilePath: string) => void;
+  onPickFolder: () => void;
+}
+
+const ProfileRow = memo(function ProfileRow({
+  rowProfiles,
+  start,
+  favFolders,
+  onContextMenu,
+  onToggleFavorite,
+  onProfileClick,
+  onPickFolder,
+}: ProfileRowProps) {
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        top: 0,
+        left: 20,
+        right: 20,
+        transform: `translateY(${start}px)`,
+        height: ROW_HEIGHT,
+        display: 'flex',
+        gap: GAP,
+        alignItems: 'flex-start',
+      }}
+    >
+      {rowProfiles.map((profile) => {
+        if (profile == null) {
+          return (
+            <div
+              key="add-card"
+              className="profile-card add-card"
+              style={{ width: CARD_WIDTH, flexShrink: 0 }}
+              onClick={onPickFolder}
+            >
+              <span className="add-icon">+</span>
+              <span className="add-label">Adicionar pasta</span>
+            </div>
+          );
+        }
+        return (
+          <div
+            key={profile.profilePath}
+            style={{ width: CARD_WIDTH, flexShrink: 0 }}
+            onContextMenu={(e) => onContextMenu(e, profile)}
+          >
+            <ProfileCard
+              profile={profile}
+              isFavorite={favFolders.has(profile.profilePath)}
+              onToggleFavorite={onToggleFavorite}
+              onClick={onProfileClick}
+            />
+          </div>
+        );
+      })}
+    </div>
+  );
+});
+
 export function ProfileList() {
   const profiles = useStore((s) => s.profiles);
   const profileLoading = useStore((s) => s.profileLoading);
@@ -28,6 +98,8 @@ export function ProfileList() {
   const [busy, setBusy] = useState(false);
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [editing, setEditing] = useState<Profile | null>(null);
+  const [query, setQuery] = useState('');
+  const [sort, setSort] = useState<ProfileSort>('name-asc');
   const menuRef = useRef<HTMLDivElement>(null);
   const menuStateRef = useRef<MenuState | null>(null);
   menuStateRef.current = menu;
@@ -86,10 +158,10 @@ export function ProfileList() {
     };
   }, []);
 
-  const handlePickFolder = async () => {
+  const handlePickFolder = useCallback(async () => {
     const path = await getApi().library.pickFolder();
     if (path) setPendingPath(path);
-  };
+  }, []);
 
   const handleChooseKind = async (kind: RootKind) => {
     if (!pendingPath) return;
@@ -138,46 +210,85 @@ export function ProfileList() {
 
   const listRef = useRef<HTMLDivElement>(null);
 
-  // Calculate columns based on container width
-  const [containerWidth, setContainerWidth] = useState(800);
+  // Recalcula colunas apenas quando o número muda (evita re-chunk a cada pixel de resize)
+  const [columnsPerRow, setColumnsPerRow] = useState(1);
 
+  // Depende de profileLoading: a lista desmonta durante o loading e remonta
+  // como novo nó — o observer precisa ser reanexado ao elemento novo.
   useEffect(() => {
     const el = listRef.current;
     if (!el) return;
 
+    let raf = 0;
+    const update = (width: number) => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        const cols = Math.max(1, Math.floor((width - 40) / (CARD_WIDTH + GAP)));
+        setColumnsPerRow((prev) => (prev === cols ? prev : cols));
+      });
+    };
+
     const observer = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        setContainerWidth(entry.contentRect.width);
-      }
+      for (const entry of entries) update(entry.contentRect.width);
     });
     observer.observe(el);
-    setContainerWidth(el.clientWidth);
-    return () => observer.disconnect();
-  }, []);
+    update(el.clientWidth);
+    return () => {
+      observer.disconnect();
+      cancelAnimationFrame(raf);
+    };
+  }, [profileLoading]);
 
-  const columnsPerRow = Math.max(1, Math.floor((containerWidth - 40) / (CARD_WIDTH + GAP)));
+  // Filtra por nome e ordena conforme seleção (padrão: alfabética A–Z)
+  const visibleProfiles = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const filtered = q
+      ? profiles.filter((p) => p.username.toLowerCase().includes(q))
+      : profiles;
+    const sorted = [...filtered];
+    switch (sort) {
+      case 'name-asc':
+        sorted.sort((a, b) => nameCollator.compare(a.username, b.username));
+        break;
+      case 'name-desc':
+        sorted.sort((a, b) => nameCollator.compare(b.username, a.username));
+        break;
+      case 'modified-desc':
+        sorted.sort((a, b) => b.modifiedAt - a.modifiedAt);
+        break;
+      case 'modified-asc':
+        sorted.sort((a, b) => a.modifiedAt - b.modifiedAt);
+        break;
+    }
+    return sorted;
+  }, [profiles, query, sort]);
 
   // Group profiles into rows + add "add-card" as last item
   const rows = useMemo(() => {
     const result: (Profile | null)[][] = [];
-    const total = profiles.length + 1; // +1 for add-card
+    const total = visibleProfiles.length + 1; // +1 for add-card
     let i = 0;
     while (i < total) {
       const row: (Profile | null)[] = [];
       for (let c = 0; c < columnsPerRow && i < total; c++, i++) {
-        row.push(i <= profiles.length ? profiles[i - 1] : null);
+        row.push(i <= visibleProfiles.length ? visibleProfiles[i - 1] : null);
       }
       result.push(row);
     }
     return result;
-  }, [profiles, columnsPerRow]);
+  }, [visibleProfiles, columnsPerRow]);
 
   const rowVirtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => listRef.current,
     estimateSize: () => ROW_HEIGHT,
-    overscan: 5,
+    overscan: 2,
   });
+
+  // Volta ao topo ao mudar busca/ordenação
+  useEffect(() => {
+    listRef.current?.scrollTo({ top: 0 });
+  }, [query, sort]);
 
   if (profileLoading) {
     return (
@@ -190,13 +301,33 @@ export function ProfileList() {
 
   return (
     <div className="profile-list-wrap">
+      <div className="profile-toolbar">
+        <input
+          type="search"
+          className="profile-search"
+          placeholder="Buscar perfil..."
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        <select
+          className="profile-sort"
+          value={sort}
+          onChange={(e) => setSort(e.target.value as ProfileSort)}
+        >
+          <option value="name-asc">Nome (A–Z)</option>
+          <option value="name-desc">Nome (Z–A)</option>
+          <option value="modified-desc">Modificação (mais recente)</option>
+          <option value="modified-asc">Modificação (mais antiga)</option>
+        </select>
+      </div>
       <div
         ref={listRef}
         className="profile-list"
         style={{
           position: 'relative',
           width: '100%',
-          height: '100%',
+          flex: 1,
+          minHeight: 0,
           overflowY: 'auto',
         }}
       >
@@ -207,59 +338,24 @@ export function ProfileList() {
             position: 'relative',
           }}
         >
-          {rowVirtualizer.getVirtualItems().map((virtualRow) => {
-            const rowProfiles = rows[virtualRow.index];
-            return (
-              <div
-                key={virtualRow.key}
-                ref={rowVirtualizer.measureElement}
-                data-index={virtualRow.index}
-                style={{
-                  position: 'absolute',
-                  top: 0,
-                  left: 20,
-                  right: 20,
-                  transform: `translateY(${virtualRow.start}px)`,
-                  height: `${virtualRow.size}px`,
-                  display: 'flex',
-                  gap: `${GAP}px`,
-                  alignItems: 'flex-start',
-                }}
-              >
-                {rowProfiles.map((profile, colIdx) => {
-                  if (profile == null) {
-                    // Add card
-                    return (
-                      <div
-                        key={`add-${colIdx}`}
-                        className="profile-card add-card"
-                        style={{ width: `${CARD_WIDTH}px`, flexShrink: 0 }}
-                        onClick={handlePickFolder}
-                      >
-                        <span className="add-icon">+</span>
-                        <span className="add-label">Adicionar pasta</span>
-                      </div>
-                    );
-                  }
-                  return (
-                    <div
-                      key={profile.profilePath}
-                      style={{ width: `${CARD_WIDTH}px`, flexShrink: 0 }}
-                      onContextMenu={(e) => handleContextMenu(e, profile)}
-                    >
-                      <ProfileCard
-                        profile={profile}
-                        isFavorite={favFolders.has(profile.profilePath)}
-                        onToggleFavorite={handleToggleFavorite}
-                        onClick={handleProfileClick}
-                      />
-                    </div>
-                  );
-                })}
-              </div>
-            );
-          })}
+          {rowVirtualizer.getVirtualItems().map((virtualRow) => (
+            <ProfileRow
+              key={virtualRow.key}
+              rowProfiles={rows[virtualRow.index]}
+              start={virtualRow.start}
+              favFolders={favFolders}
+              onContextMenu={handleContextMenu}
+              onToggleFavorite={handleToggleFavorite}
+              onProfileClick={handleProfileClick}
+              onPickFolder={handlePickFolder}
+            />
+          ))}
         </div>
+        {visibleProfiles.length === 0 && (
+          <div className="empty-state">
+            <span>Nenhum perfil encontrado para "{query.trim()}".</span>
+          </div>
+        )}
       </div>
 
       {menu && (
