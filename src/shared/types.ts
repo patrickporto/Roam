@@ -59,6 +59,8 @@ export interface Profile {
   username: string;
   coverUrl: string | null;
   mediaCount: number;
+  /** Epoch ms da mídia mais recentemente modificada do perfil (0 se vazio). */
+  modifiedAt: number;
   albums: AlbumSummary[];
   isFavorite: boolean;
 }

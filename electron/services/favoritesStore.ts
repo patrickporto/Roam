@@ -139,21 +139,21 @@ export function listMediaScored(
 
   const favParams = favFiles.map((f) => f.target_path);
 
-  // Scoring: recency decay + favorite boost + random tiebreaker
-  // Higher favorite weight (0.45 vs 0.3) since within a single profile,
-  // the favorite signal is more meaningful
+  // Scoring: recency decay + favorite boost, com tiebreaker determinístico.
+  // A ordenação PRECISA ser determinística: a paginação é por OFFSET, e um
+  // componente aleatório no ORDER BY faria itens se repetirem entre páginas
+  // e outros nunca aparecerem na grade.
   const sql = `
     SELECT
       path,
       modified_at,
       (
-        0.45 * (1.0 / (1.0 + (strftime('%s','now') * 1000.0 - modified_at) / 864000000.0))
-        + 0.45 * (CASE WHEN path IN ${favIn} THEN 1.0 ELSE 0.0 END)
-        + 0.1 * (ABS(RANDOM()) % 100) / 100.0
+        0.5 * (1.0 / (1.0 + (strftime('%s','now') * 1000.0 - modified_at) / 864000000.0))
+        + 0.5 * (CASE WHEN path IN ${favIn} THEN 1.0 ELSE 0.0 END)
       ) AS score
     FROM media_index
     WHERE profile_path = ? COLLATE NOCASE
-    ORDER BY score DESC
+    ORDER BY score DESC, path ASC
     LIMIT ? OFFSET ?`;
 
   const rows = db
@@ -343,6 +343,7 @@ function assembleProfile(
   profilePath: string,
   favFolders: Set<string>,
   mediaCountMap: Map<string, number>,
+  modifiedAtMap: Map<string, number>,
   coverMap: Map<string, string>,
   albumsByProfile: Map<string, { path: string; mediaCount: number }[]>,
   albumCoverMap: Map<string, string>,
@@ -362,6 +363,7 @@ function assembleProfile(
     username: basename(profilePath),
     coverUrl: coverMap.has(profilePath) ? toMediaUrl(coverMap.get(profilePath)!) : null,
     mediaCount: mediaCountMap.get(profilePath) ?? 0,
+    modifiedAt: modifiedAtMap.get(profilePath) ?? 0,
     albums,
     isFavorite: favFolders.has(profilePath),
   };
@@ -388,16 +390,18 @@ function batchBuildProfiles(
   const db = getDb();
   const placeholders = profilePaths.map(() => '?').join(',');
 
-  // ── 1. Batch media counts ────────────────────────────────────────────────
+  // ── 1. Batch media counts + última modificação ───────────────────────────
   const countRows = db
     .prepare(
-      `SELECT profile_path, COUNT(*) as c FROM media_index WHERE profile_path IN (${placeholders}) GROUP BY profile_path`,
+      `SELECT profile_path, COUNT(*) as c, MAX(modified_at) as m FROM media_index WHERE profile_path IN (${placeholders}) GROUP BY profile_path`,
     )
-    .all(...profilePaths) as { profile_path: string; c: number }[];
+    .all(...profilePaths) as { profile_path: string; c: number; m: number | null }[];
 
   const mediaCountMap = new Map<string, number>();
+  const modifiedAtMap = new Map<string, number>();
   for (const row of countRows) {
     mediaCountMap.set(row.profile_path, row.c);
+    modifiedAtMap.set(row.profile_path, row.m ?? 0);
   }
 
   // ── 2. Batch profile cover images ────────────────────────────────────────
@@ -492,6 +496,7 @@ function batchBuildProfiles(
       pp,
       favFolders,
       mediaCountMap,
+      modifiedAtMap,
       coverMap,
       albumsByProfile,
       albumCoverMap,

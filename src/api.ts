@@ -107,6 +107,7 @@ function installMockApi(): RoamApi {
       username: profilePath.split('/').pop()!,
       coverUrl: items[0]?.mediaUrl ?? null,
       mediaCount: items.length,
+      modifiedAt: items.reduce((max, i) => Math.max(max, i.modifiedAt), 0),
       albums: albums.map((a) => {
         const albumItems = items.filter((i) => i.albumPath === a);
         return {
