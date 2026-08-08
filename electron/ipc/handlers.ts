@@ -1,4 +1,5 @@
 import { ipcMain, dialog, BrowserWindow, shell } from 'electron';
+import { promises as fs } from 'fs';
 import { getDb } from '../services/db';
 import { scanRoot, ScanCallbacks } from '../services/mediaScanner';
 import {
@@ -252,9 +253,49 @@ async function startScanForRoot(rootPath: string): Promise<void> {
     },
   };
 
+  const scanStartedAt = Date.now();
+
   try {
-    await scanRoot(rootPath, callbacks, kind);
+    const result = await scanRoot(rootPath, callbacks, kind);
+    if (!result.cancelled) {
+      await reconcileRoot(rootPath, scanStartedAt, result.errors);
+    }
   } finally {
     activeScans.delete(rootPath);
+  }
+}
+
+/**
+ * Reconcilia o índice com o disco após um scan completo:
+ * - Raiz removida do disco: apaga root (cascade limpa media_index)
+ *   e favoritos sob o path.
+ * - Scan sem erros de leitura: remove entradas não revalidadas
+ *   (indexed_at anterior ao início do scan = arquivo/pasta deletado).
+ * Com erros de leitura, não poda: um diretório ilegível transitório
+ * apagaria itens válidos do índice.
+ */
+async function reconcileRoot(
+  rootPath: string,
+  scanStartedAt: number,
+  errors: number,
+): Promise<void> {
+  const db = getDb();
+  const rootExists = await fs.stat(rootPath).then(() => true).catch(() => false);
+
+  if (!rootExists) {
+    db.prepare(`DELETE FROM roots WHERE path = ?`).run(rootPath);
+    db.prepare(`DELETE FROM favorites WHERE target_path LIKE ?`).run(rootPath + '%');
+    refreshRoots();
+    clearFeedSessions();
+    return;
+  }
+
+  if (errors > 0) return;
+
+  const pruned = db
+    .prepare(`DELETE FROM media_index WHERE root_path = ? AND indexed_at < ?`)
+    .run(rootPath, scanStartedAt);
+  if (pruned.changes > 0) {
+    clearFeedSessions();
   }
 }
