@@ -6,6 +6,8 @@ interface MediaGridProps {
   onSelect: (item: MediaItem) => void;
   onReachEnd?: () => void;
   loading?: boolean;
+  /** Quando presente, exibe um coração no tile para desfavoritar. */
+  onUnfavorite?: (item: MediaItem) => void;
 }
 
 const SKELETON_COUNT = 8;
@@ -44,7 +46,7 @@ function TileVideo({ item }: { item: MediaItem }) {
 }
 
 /** Grade de miniaturas estilo TikTok (perfil/favoritos). */
-export function MediaGrid({ items, onSelect, onReachEnd, loading = false }: MediaGridProps) {
+export function MediaGrid({ items, onSelect, onReachEnd, loading = false, onUnfavorite }: MediaGridProps) {
   const sentinelRef = useRef<HTMLDivElement>(null);
   const onReachEndRef = useRef(onReachEnd);
   onReachEndRef.current = onReachEnd;
@@ -94,6 +96,20 @@ export function MediaGrid({ items, onSelect, onReachEnd, loading = false }: Medi
             <TileVideo item={item} />
           )}
           <span className="tile-format">{item.format.toUpperCase()}</span>
+          {onUnfavorite && (
+            <button
+              className="tile-unfavorite"
+              title="Remover dos favoritos"
+              onClick={(e) => {
+                e.stopPropagation();
+                onUnfavorite(item);
+              }}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" />
+              </svg>
+            </button>
+          )}
         </button>
       ))}
       {loading &&

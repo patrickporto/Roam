@@ -1265,3 +1265,195 @@ video.media-el {
 .context-menu button + button {
   border-top: 1px solid rgba(255, 255, 255, 0.04);
 }
+
+/* ── Favorites page ────────────────────────────────────────────────────── */
+
+.favorites-page {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding-top: var(--titlebar-h);
+  overflow: hidden;
+}
+
+.fav-hero {
+  position: relative;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.fav-hero-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 22px 20px 16px;
+}
+
+.fav-hero-icon {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent);
+  border: 2px solid var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  backdrop-filter: blur(6px);
+}
+
+.fav-folders-rail {
+  display: flex;
+  gap: 12px;
+  padding: 6px 20px 14px;
+  overflow-x: auto;
+  flex-shrink: 0;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.fav-folders-rail::-webkit-scrollbar {
+  display: none;
+}
+
+.fav-folder-card {
+  flex-shrink: 0;
+  width: 132px;
+  padding: 0;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  cursor: pointer;
+  color: var(--text-primary);
+  transition: transform 0.15s, border-color 0.15s;
+}
+
+.fav-folder-card:hover {
+  transform: scale(1.04);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.fav-folder-card.disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.fav-folder-card.disabled:hover {
+  transform: none;
+  border-color: var(--border);
+}
+
+.fav-folder-card .cover {
+  height: 84px;
+  background: var(--bg-surface);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.fav-folder-card .cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.fav-folder-card .cover-placeholder {
+  font-size: 24px;
+  opacity: 0.5;
+}
+
+.fav-folder-card .name {
+  display: block;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 8px 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
+}
+
+.fav-toolbar {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 8px 20px 12px;
+  flex-shrink: 0;
+}
+
+.fav-filter-chips {
+  display: flex;
+  gap: 6px;
+}
+
+.fav-filter-chip {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 7px 14px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.fav-filter-chip:hover {
+  color: var(--text-primary);
+}
+
+.fav-filter-chip.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.fav-empty {
+  flex-direction: column;
+  gap: 8px;
+}
+
+.fav-empty-icon {
+  color: var(--accent);
+  opacity: 0.7;
+  margin-bottom: 4px;
+}
+
+.fav-empty-hint {
+  font-size: 13px;
+  opacity: 0.7;
+}
+
+.tile-unfavorite {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(0, 0, 0, 0.55);
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, transform 0.15s;
+  backdrop-filter: blur(4px);
+  z-index: 2;
+}
+
+.media-tile:hover .tile-unfavorite {
+  opacity: 1;
+}
+
+.tile-unfavorite:hover {
+  transform: scale(1.12);
+}
+
