@@ -104,6 +104,29 @@ function migrate(db: Database.Database) {
     `);
     db.pragma('user_version = 4');
   }
+
+  if (version < 5) {
+    // Tags: nomes únicos case-insensitive; item_tags associa tag a arquivo/pasta.
+    // Paths órfãos (mídia/pasta removida) são ignorados na resolução,
+    // mesma estratégia dos favoritos.
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS tags (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT UNIQUE NOT NULL COLLATE NOCASE,
+        created_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS item_tags (
+        tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+        target_type TEXT NOT NULL CHECK(target_type IN ('file','folder')),
+        target_path TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (tag_id, target_type, target_path)
+      );
+      CREATE INDEX IF NOT EXISTS idx_item_tags_target ON item_tags(target_type, target_path);
+      CREATE INDEX IF NOT EXISTS idx_item_tags_tag ON item_tags(tag_id);
+    `);
+    db.pragma('user_version = 5');
+  }
 }
 
 export function closeDb() {

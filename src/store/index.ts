@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { create } from 'zustand';
-import type { Profile, FeedPage, MediaItem, SortOrder } from '../shared/types';
+import type { Profile, FeedPage, MediaItem, SortOrder, Tag, TagSummary, TagTargetType } from '../shared/types';
 import { getApi } from '../api';
 
 // ── Store ────────────────────────────────────────────────────────────────────
 
 interface AppState {
-  activeTab: 'for-you' | 'library' | 'favorites';
-  setActiveTab: (tab: 'for-you' | 'library' | 'favorites') => void;
+  activeTab: 'for-you' | 'library' | 'favorites' | 'tags';
+  setActiveTab: (tab: 'for-you' | 'library' | 'favorites' | 'tags') => void;
 
   // Feed (janela deslizante para escala: feedTrimOffset conta itens descartados)
   feedItems: MediaItem[];
@@ -32,6 +32,16 @@ interface AppState {
   setFav: (files: string[], folders: string[]) => void;
   toggleFavFile: (path: string, newState: boolean) => void;
   toggleFavFolder: (path: string, newState: boolean) => void;
+
+  // Tags
+  allTags: TagSummary[];
+  setAllTags: (tags: TagSummary[]) => void;
+  /** Cache de tags por alvo, chave `${targetType}:${targetPath}`. */
+  itemTags: Map<string, Tag[]>;
+  setItemTags: (key: string, tags: Tag[]) => void;
+  /** Tag selecionada para o feed por tag (aba Tags). */
+  selectedTagId: number | null;
+  selectTag: (id: number | null) => void;
 
   // Detail view (profile)
   selectedProfile: Profile | null;
@@ -101,6 +111,19 @@ export const useStore = create<AppState>((set) => ({
       return { favFolders: next };
     }),
 
+  allTags: [],
+  setAllTags: (tags) => set({ allTags: tags }),
+  itemTags: new Map(),
+  setItemTags: (key, tags) =>
+    set((s) => {
+      const next = new Map(s.itemTags);
+      next.set(key, tags);
+      return { itemTags: next };
+    }),
+  selectedTagId: null,
+  selectTag: (id) =>
+    set({ selectedTagId: id, selectedRoot: null, selectedProfile: null }),
+
   selectedProfile: null,
   selectedRoot: null,
   selectProfile: (profilePath) =>
@@ -163,6 +186,7 @@ export function useIsFavFile(path: string): boolean {
 }
 
 export function useFavorites() {
+
   const favFiles = useStore((s) => s.favFiles);
   const favFolders = useStore((s) => s.favFolders);
   const [loading, setLoading] = useState(false);
@@ -198,6 +222,105 @@ export function useFavorites() {
   );
 
   return { favFiles, favFolders, toggleFile, toggleFolder, loading };
+}
+
+// ── Tags ─────────────────────────────────────────────────────────────────────
+
+function tagKey(targetType: TagTargetType, targetPath: string): string {
+  return `${targetType}:${targetPath}`;
+}
+
+function refreshAllTags(): void {
+  getApi()
+    .tags.list()
+    .then((tags) => useStore.getState().setAllTags(tags))
+    .catch(() => {});
+}
+
+/** Lista global de tags com contagem; carrega uma vez e invalida via refreshAllTags nas mutações. */
+export function useAllTags(): TagSummary[] {
+  const allTags = useStore((s) => s.allTags);
+  useEffect(() => {
+    if (useStore.getState().allTags.length === 0) refreshAllTags();
+  }, []);
+  return allTags;
+}
+
+/** Tags aplicadas a um alvo; busca sob demanda e cacheia no store. */
+export function useItemTags(
+  targetType: TagTargetType,
+  targetPath: string,
+  enabled = true,
+): Tag[] {
+  const key = tagKey(targetType, targetPath);
+  const cached = useStore((s) => s.itemTags.get(key));
+
+  useEffect(() => {
+    if (!enabled || cached !== undefined) return;
+    getApi()
+      .tags.forItem(targetType, targetPath)
+      .then((tags) => useStore.getState().setItemTags(key, tags))
+      .catch(() => {});
+  }, [key, enabled, cached]);
+
+  return cached ?? [];
+}
+
+/** Aplica tag com atualização otimista; reconcilia com a resposta do main. */
+export async function applyTag(
+  name: string,
+  targetType: TagTargetType,
+  targetPath: string,
+): Promise<void> {
+  const trimmed = name.trim();
+  if (!trimmed) return;
+
+  const key = tagKey(targetType, targetPath);
+  const state = useStore.getState();
+  const current = state.itemTags.get(key) ?? [];
+
+  const existing = state.allTags.find(
+    (t) => t.name.toLowerCase() === trimmed.toLowerCase(),
+  );
+  const optimistic: Tag = existing ?? { id: -Date.now(), name: trimmed };
+  if (!current.some((t) => t.id === optimistic.id)) {
+    state.setItemTags(key, [...current, optimistic]);
+  }
+
+  try {
+    const tag = await getApi().tags.add(trimmed, targetType, targetPath);
+    if (tag) {
+      const latest = useStore.getState().itemTags.get(key) ?? [];
+      useStore.getState().setItemTags(key, [
+        ...latest.filter((t) => t.id !== optimistic.id && t.id !== tag.id),
+        tag,
+      ]);
+      refreshAllTags();
+    }
+  } catch {
+    // rollback otimista
+    const latest = useStore.getState().itemTags.get(key) ?? [];
+    useStore.getState().setItemTags(key, latest.filter((t) => t.id !== optimistic.id));
+  }
+}
+
+/** Remove tag do alvo com atualização otimista. */
+export async function unapplyTag(
+  tagId: number,
+  targetType: TagTargetType,
+  targetPath: string,
+): Promise<void> {
+  const key = tagKey(targetType, targetPath);
+  const state = useStore.getState();
+  const current = state.itemTags.get(key) ?? [];
+  state.setItemTags(key, current.filter((t) => t.id !== tagId));
+
+  try {
+    await getApi().tags.remove(tagId, targetType, targetPath);
+    refreshAllTags();
+  } catch {
+    useStore.getState().setItemTags(key, current);
+  }
 }
 
 export function useProfileMedia(

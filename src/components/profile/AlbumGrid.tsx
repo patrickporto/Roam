@@ -1,4 +1,7 @@
+import { useState } from 'react';
 import type { AlbumSummary } from '../../shared/types';
+import { useItemTags } from '../../store';
+import { TagPopover } from '../TagPopover';
 
 interface AlbumGridProps {
   albums: AlbumSummary[];
@@ -13,6 +16,8 @@ export function AlbumGrid({
   onToggleFavorite,
   onSelectAlbum,
 }: AlbumGridProps) {
+  const [taggingAlbum, setTaggingAlbum] = useState<string | null>(null);
+
   if (albums.length === 0) return null;
 
   return (
@@ -35,6 +40,14 @@ export function AlbumGrid({
             <div className="info">
               <div className="name">
                 {album.name}
+                <AlbumTagButton
+                  path={album.path}
+                  open={taggingAlbum === album.path}
+                  onToggle={() =>
+                    setTaggingAlbum((cur) => (cur === album.path ? null : album.path))
+                  }
+                  onClose={() => setTaggingAlbum(null)}
+                />
                 <button
                   className={`fav-btn ${isFav ? 'favorited' : ''}`}
                   onClick={(e) => {
@@ -60,5 +73,46 @@ export function AlbumGrid({
         );
       })}
     </div>
+  );
+}
+
+function AlbumTagButton({
+  path,
+  open,
+  onToggle,
+  onClose,
+}: {
+  path: string;
+  open: boolean;
+  onToggle: () => void;
+  onClose: () => void;
+}) {
+  const tags = useItemTags('folder', path);
+  return (
+    <>
+      <button
+        className={`fav-btn ${tags.length > 0 ? 'tagged' : ''}`}
+        title="Tags"
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggle();
+        }}
+      >
+        <svg
+          width="14"
+          height="14"
+          viewBox="0 0 24 24"
+          fill={tags.length > 0 ? 'currentColor' : 'none'}
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" />
+          <line x1="7" y1="7" x2="7.01" y2="7" />
+        </svg>
+      </button>
+      {open && <TagPopover targetType="folder" targetPath={path} onClose={onClose} />}
+    </>
   );
 }

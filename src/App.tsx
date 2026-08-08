@@ -6,6 +6,7 @@ import { FeedView } from './components/feed/FeedView';
 import { ProfileList } from './components/profile/ProfileList';
 import { ProfilePage } from './components/profile/ProfilePage';
 import { FavoritesPage } from './components/FavoritesPage';
+import { TagsPage } from './components/TagsPage';
 
 export default function App() {
   const activeTab = useStore((s) => s.activeTab);
@@ -23,6 +24,8 @@ export default function App() {
         return <ProfileList />;
       case 'favorites':
         return <FavoritesPage />;
+      case 'tags':
+        return <TagsPage />;
     }
   }, [activeTab, selectedRoot]);
 

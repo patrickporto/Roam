@@ -4,9 +4,16 @@ import { getDb } from '../services/db';
 import { scanRoot, ScanCallbacks } from '../services/mediaScanner';
 import {
   getForYouPage,
+  getTagFeedPage,
   resetFeedSession,
   clearFeedSessions,
 } from '../services/recommendation';
+import {
+  listTags,
+  tagsForItem,
+  addTag,
+  removeTag,
+} from '../services/tagsStore';
 import {
   listMedia,
   listMediaScored,
@@ -23,6 +30,7 @@ import type {
   MediaScope,
   SortOrder,
   FavoriteTargetType,
+  TagTargetType,
 } from '../../src/shared/types';
 
 // active scan handles for cancellation
@@ -87,6 +95,9 @@ export function registerIpcHandlers(): void {
     db.prepare(`DELETE FROM favorites WHERE target_path LIKE ?`).run(
       rootPath + '%',
     );
+    db.prepare(`DELETE FROM item_tags WHERE target_path LIKE ?`).run(
+      rootPath + '%',
+    );
     refreshRoots();
     clearFeedSessions();
   });
@@ -133,6 +144,35 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle('favorites:media', async (_e, cursor?: string) => {
     return favoritesMedia(cursor);
+  });
+
+  // ── Tags ──
+
+  ipcMain.handle('tags:list', async () => listTags());
+
+  ipcMain.handle(
+    'tags:forItem',
+    async (_e, targetType: TagTargetType, targetPath: string) => {
+      return tagsForItem(targetType, targetPath);
+    },
+  );
+
+  ipcMain.handle(
+    'tags:add',
+    async (_e, name: string, targetType: TagTargetType, targetPath: string) => {
+      return addTag(name, targetType, targetPath);
+    },
+  );
+
+  ipcMain.handle(
+    'tags:remove',
+    async (_e, tagId: number, targetType: TagTargetType, targetPath: string) => {
+      removeTag(tagId, targetType, targetPath);
+    },
+  );
+
+  ipcMain.handle('tags:feedPage', async (_e, tagId: number, cursor?: string) => {
+    return getTagFeedPage(tagId, cursor);
   });
 
   // ── Scan ──
@@ -267,8 +307,8 @@ async function startScanForRoot(rootPath: string): Promise<void> {
 
 /**
  * Reconcilia o índice com o disco após um scan completo:
- * - Raiz removida do disco: apaga root (cascade limpa media_index)
- *   e favoritos sob o path.
+ * - Raiz removida do disco: apaga root (cascade limpa media_index),
+ *   favoritos e tags sob o path.
  * - Scan sem erros de leitura: remove entradas não revalidadas
  *   (indexed_at anterior ao início do scan = arquivo/pasta deletado).
  * Com erros de leitura, não poda: um diretório ilegível transitório
@@ -285,6 +325,7 @@ async function reconcileRoot(
   if (!rootExists) {
     db.prepare(`DELETE FROM roots WHERE path = ?`).run(rootPath);
     db.prepare(`DELETE FROM favorites WHERE target_path LIKE ?`).run(rootPath + '%');
+    db.prepare(`DELETE FROM item_tags WHERE target_path LIKE ?`).run(rootPath + '%');
     refreshRoots();
     clearFeedSessions();
     return;

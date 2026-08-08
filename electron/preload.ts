@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { RoamApi, ScanProgress, RootKind, MediaScope, SortOrder, FavoriteTargetType } from '../src/shared/types';
+import type { RoamApi, ScanProgress, RootKind, MediaScope, SortOrder, FavoriteTargetType, TagTargetType } from '../src/shared/types';
 
 const api: RoamApi = {
   library: {
@@ -25,6 +25,17 @@ const api: RoamApi = {
       ipcRenderer.invoke('favorites:toggle', targetType, targetPath),
     list: () => ipcRenderer.invoke('favorites:list'),
     media: (cursor?: string) => ipcRenderer.invoke('favorites:media', cursor),
+  },
+  tags: {
+    list: () => ipcRenderer.invoke('tags:list'),
+    forItem: (targetType: TagTargetType, targetPath: string) =>
+      ipcRenderer.invoke('tags:forItem', targetType, targetPath),
+    add: (name: string, targetType: TagTargetType, targetPath: string) =>
+      ipcRenderer.invoke('tags:add', name, targetType, targetPath),
+    remove: (tagId: number, targetType: TagTargetType, targetPath: string) =>
+      ipcRenderer.invoke('tags:remove', tagId, targetType, targetPath),
+    feedPage: (tagId: number, cursor?: string) =>
+      ipcRenderer.invoke('tags:feedPage', tagId, cursor),
   },
   scan: {
     start: (rootPath: string) => ipcRenderer.invoke('scan:start', rootPath),

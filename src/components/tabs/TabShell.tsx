@@ -24,6 +24,12 @@ export function TabShell() {
       >
         Favoritos
       </button>
+      <button
+        className={`top-tab ${activeTab === 'tags' ? 'active' : ''}`}
+        onClick={() => setActiveTab('tags')}
+      >
+        Tags
+      </button>
     </nav>
   );
 }

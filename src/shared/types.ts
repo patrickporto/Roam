@@ -89,6 +89,19 @@ export interface FavoritesSnapshot {
   folders: string[];
 }
 
+/** Tipo de alvo de tag: arquivo individual ou pasta (perfil/álbum). */
+export type TagTargetType = 'file' | 'folder';
+
+export interface Tag {
+  id: number;
+  name: string;
+}
+
+/** Tag com contagem de itens associados (arquivos + conteúdo de pastas). */
+export interface TagSummary extends Tag {
+  itemCount: number;
+}
+
 /** Escopo de listagem de mídia: um perfil inteiro ou um álbum específico. */
 export interface MediaScope {
   profilePath?: string;
@@ -125,6 +138,18 @@ export interface RoamApi {
     list(): Promise<FavoritesSnapshot>;
     /** Arquivos curtidos, mais recentemente curtidos primeiro, paginados. */
     media(cursor?: string): Promise<FeedPage>;
+  };
+  tags: {
+    /** Todas as tags com contagem de itens, ordenadas por nome. */
+    list(): Promise<TagSummary[]>;
+    /** Tags aplicadas a um alvo (arquivo ou pasta). */
+    forItem(targetType: TagTargetType, targetPath: string): Promise<Tag[]>;
+    /** Cria (se necessário) e aplica a tag ao alvo; retorna a tag aplicada (null se nome vazio). */
+    add(name: string, targetType: TagTargetType, targetPath: string): Promise<Tag | null>;
+    /** Remove a associação da tag com o alvo. */
+    remove(tagId: number, targetType: TagTargetType, targetPath: string): Promise<void>;
+    /** Página do feed filtrado por tag (arquivos tageados + conteúdo de pastas tageadas). */
+    feedPage(tagId: number, cursor?: string): Promise<FeedPage>;
   };
   scan: {
     start(rootPath: string): Promise<void>;

@@ -6,6 +6,9 @@ import type {
   FavoritesSnapshot,
   MediaScope,
   FavoriteTargetType,
+  Tag,
+  TagSummary,
+  TagTargetType,
   RootKind,
 } from './shared/types';
 
@@ -180,6 +183,56 @@ function installMockApi(): RoamApi {
         return paginate(favItems, cursor);
       },
     },
+    tags: (() => {
+      let nextId = 1;
+      const tags = new Map<number, Tag>();
+      const links = new Set<string>(); // `${tagId}|${type}|${path}`
+      const byName = (name: string) =>
+        [...tags.values()].find((t) => t.name.toLowerCase() === name.toLowerCase());
+      const pathsForTag = (tagId: number): Set<string> =>
+        new Set(
+          [...links]
+            .filter((l) => l.startsWith(`${tagId}|`))
+            .map((l) => l.split('|').slice(2).join('|')),
+        );
+      return {
+        list: async (): Promise<TagSummary[]> =>
+          [...tags.values()]
+            .sort((a, b) => a.name.localeCompare(b.name))
+            .map((t) => {
+              const paths = pathsForTag(t.id);
+              const count = allItems.filter((i) =>
+                [...paths].some((p) => i.path === p || i.path.startsWith(p + '/')),
+              ).length;
+              return { ...t, itemCount: count };
+            }),
+        forItem: async (targetType: TagTargetType, targetPath: string): Promise<Tag[]> =>
+          [...links]
+            .filter((l) => l.endsWith(`|${targetType}|${targetPath}`))
+            .map((l) => tags.get(Number(l.split('|')[0]))!)
+            .filter(Boolean),
+        add: async (name: string, targetType: TagTargetType, targetPath: string): Promise<Tag> => {
+          const trimmed = name.trim().replace(/\s+/g, ' ');
+          let tag = byName(trimmed);
+          if (!tag) {
+            tag = { id: nextId++, name: trimmed };
+            tags.set(tag.id, tag);
+          }
+          links.add(`${tag.id}|${targetType}|${targetPath}`);
+          return tag;
+        },
+        remove: async (tagId: number, targetType: TagTargetType, targetPath: string) => {
+          links.delete(`${tagId}|${targetType}|${targetPath}`);
+        },
+        feedPage: async (tagId: number, cursor?: string) => {
+          const paths = pathsForTag(tagId);
+          const items = allItems.filter((i) =>
+            [...paths].some((p) => i.path === p || i.path.startsWith(p + '/')),
+          );
+          return paginate(items, cursor);
+        },
+      };
+    })(),
     scan: {
       start: async () => {},
       cancel: async () => {},

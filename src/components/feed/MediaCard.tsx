@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import type { MediaItem } from '../../shared/types';
 import { IDENTITY, nextScale, panBy, zoomAt, type ZoomTransform } from '../../shared/zoom';
-import { useStore } from '../../store';
+import { useItemTags, useStore } from '../../store';
+import { TagPopover } from '../TagPopover';
 
 interface MediaCardProps {
   item: MediaItem;
@@ -89,12 +90,22 @@ export function MediaCard({
   const [paused, setPaused] = useState(false);
   const [progress, setProgress] = useState(0);
   const [burst, setBurst] = useState(false);
+  const [tagPopoverOpen, setTagPopoverOpen] = useState(false);
   const [zoom, setZoom] = useState<ZoomTransform>(IDENTITY);
   const [panning, setPanning] = useState(false);
   const zoomRef = useRef<ZoomTransform>(IDENTITY);
   const dragRef = useRef<{ startX: number; startY: number; moved: boolean } | null>(null);
   const suppressClickRef = useRef(false);
   const selectProfile = useStore((s) => s.selectProfile);
+  const selectTag = useStore((s) => s.selectTag);
+  const setActiveTab = useStore((s) => s.setActiveTab);
+  // Busca tags apenas do card ativo para evitar N chamadas IPC por página
+  const itemTags = useItemTags('file', item.path, active);
+
+  const openTagFeed = (tagId: number) => {
+    selectTag(tagId);
+    setActiveTab('tags');
+  };
 
   const imageFit = useMediaFit(imageRef);
   const videoFit = useMediaFit(videoRef);
@@ -304,6 +315,19 @@ export function MediaCard({
           <span>{formatSize(item.size)}</span>
           <span>{formatDate(item.modifiedAt)}</span>
         </div>
+        {itemTags.length > 0 && (
+          <div className="info-tags">
+            {itemTags.map((t) => (
+              <button
+                key={t.id}
+                className="info-tag-chip"
+                onClick={() => openTagFeed(t.id)}
+              >
+                #{t.name}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="rail">
@@ -333,6 +357,14 @@ export function MediaCard({
           <BookmarkIcon filled={isFavFolder} />
         </button>
 
+        <button
+          className={`rail-btn ${itemTags.length > 0 ? 'on-tag' : ''}`}
+          onClick={() => setTagPopoverOpen((o) => !o)}
+          title="Tags"
+        >
+          <TagIcon filled={itemTags.length > 0} />
+        </button>
+
         {item.type === 'video' && (
           <button
             className="rail-btn"
@@ -348,6 +380,14 @@ export function MediaCard({
         <div className="progress" onClick={handleSeek}>
           <div className="progress-fill" style={{ width: `${progress}%` }} />
         </div>
+      )}
+
+      {tagPopoverOpen && (
+        <TagPopover
+          targetType="file"
+          targetPath={item.path}
+          onClose={() => setTagPopoverOpen(false)}
+        />
       )}
     </div>
   );
@@ -385,6 +425,24 @@ function BookmarkIcon({ filled }: { filled?: boolean }) {
       strokeLinejoin="round"
     >
       <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+    </svg>
+  );
+}
+
+function TagIcon({ filled }: { filled?: boolean }) {
+  return (
+    <svg
+      width="26"
+      height="26"
+      viewBox="0 0 24 24"
+      fill={filled ? 'currentColor' : 'none'}
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" />
+      <line x1="7" y1="7" x2="7.01" y2="7" />
     </svg>
   );
 }

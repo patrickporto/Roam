@@ -1,5 +1,6 @@
 import { getDb } from './db';
 import { toMediaUrl } from './urlUtil';
+import { escapeLikePrefix } from './tagsStore';
 import type { FeedPage, MediaItem } from '../../src/shared/types';
 
 const PAGE_SIZE = 20;
@@ -15,6 +16,14 @@ interface FeedSession {
   createdAt: number;
 }
 
+/** Filtro SQL opcional sobre media_index (usado pelo feed de tag). */
+interface SqlFilter {
+  where: string;
+  params: (string | number)[];
+}
+
+const NO_FILTER: SqlFilter = { where: '', params: [] };
+
 const sessions = new Map<string, FeedSession>();
 
 function gcSessions(): void {
@@ -29,9 +38,36 @@ export function clearFeedSessions(): void {
   sessions.clear();
 }
 
-function createFeedSession(): string | null {
+/**
+ * Constrói o filtro do feed de uma tag: união de arquivos tageados
+ * individualmente e mídias contidas em pastas tageadas (flatten).
+ * A deduplicação é garantida pela chave `path` e pelo set `served` da sessão.
+ */
+function buildTagFilter(tagId: number): SqlFilter {
   const db = getDb();
-  const total = db.prepare(`SELECT COUNT(*) as c FROM media_index`).get() as { c: number };
+  const folders = db
+    .prepare(`SELECT target_path FROM item_tags WHERE tag_id = ? AND target_type = 'folder'`)
+    .all(tagId) as { target_path: string }[];
+
+  const clauses = [
+    `path IN (SELECT target_path FROM item_tags WHERE tag_id = ? AND target_type = 'file')`,
+  ];
+  const params: (string | number)[] = [tagId];
+
+  for (const f of folders) {
+    clauses.push(`(path LIKE ? || '/%' ESCAPE '!' OR path LIKE ? || '\\%' ESCAPE '!')`);
+    const escaped = escapeLikePrefix(f.target_path);
+    params.push(escaped, escaped);
+  }
+
+  return { where: ` AND (${clauses.join(' OR ')})`, params };
+}
+
+function createFeedSession(filter: SqlFilter): string | null {
+  const db = getDb();
+  const total = db
+    .prepare(`SELECT COUNT(*) as c FROM media_index WHERE 1=1${filter.where}`)
+    .get(...filter.params) as { c: number };
   if (total.c === 0) return null;
 
   const id = `${Date.now()}:${Math.floor(Math.random() * 1e9)}`;
@@ -48,6 +84,7 @@ function gatherFavParams(): {
   favFolders: string[];
   likedProfiles: string[];
   likedFormats: string[];
+  taggedFolders: string[];
 } {
   const db = getDb();
 
@@ -56,6 +93,12 @@ function gatherFavParams(): {
     .prepare(`SELECT target_path FROM favorites WHERE target_type = 'folder'`)
     .all() as { target_path: string }[];
   const folderPaths = favFolders.map((r) => r.target_path);
+
+  // Pastas tageadas (boost de tag no For You)
+  const taggedFolderRows = db
+    .prepare(`SELECT DISTINCT target_path FROM item_tags WHERE target_type = 'folder'`)
+    .all() as { target_path: string }[];
+  const taggedFolders = taggedFolderRows.map((r) => r.target_path);
 
   // Arquivos favoritos → extraí format e profile_path
   const favFiles = db
@@ -93,6 +136,7 @@ function gatherFavParams(): {
     favFolders: folderPaths,
     likedProfiles,
     likedFormats: [...likedFormats],
+    taggedFolders,
   };
 }
 
@@ -108,7 +152,7 @@ function gatherFavParams(): {
  * O pool é limitado a CANDIDATE_POOL para evitar varrer milhões de linhas a cada página.
  * Dentro do pool, excluímos o que já foi servido nesta sessão.
  */
-function scoreQuery(served: string[]): { path: string; modified_at: number }[] {
+function scoreQuery(served: string[], filter: SqlFilter): { path: string; modified_at: number }[] {
   const db = getDb();
   const fav = gatherFavParams();
 
@@ -121,6 +165,15 @@ function scoreQuery(served: string[]): { path: string; modified_at: number }[] {
   const likedFormatsIn = fav.likedFormats.length > 0
     ? `(${fav.likedFormats.map(() => '?').join(',')})`
     : `('')`;
+
+  // Boost de tags: arquivos tageados individualmente ou sob pastas tageadas.
+  const taggedFoldersCond = fav.taggedFolders.length > 0
+    ? `(${fav.taggedFolders.map(() => `path LIKE ? || '/%' ESCAPE '!' OR path LIKE ? || '\\%' ESCAPE '!'`).join(' OR ')})`
+    : `1=0`;
+  const taggedFolderParams = fav.taggedFolders.flatMap((f) => {
+    const escaped = escapeLikePrefix(f);
+    return [escaped, escaped];
+  });
 
   const servedIn = served.length > 0
     ? ` AND path NOT IN (${served.map(() => '?').join(',')})`
@@ -146,11 +199,13 @@ function scoreQuery(served: string[]): { path: string; modified_at: number }[] {
             + (CASE WHEN album_path IN ${favFoldersIn} THEN 1 ELSE 0 END)
             + (CASE WHEN profile_path IN ${likedProfilesIn} THEN 0.5 ELSE 0 END)
             + (CASE WHEN format IN ${likedFormatsIn} THEN 0.5 ELSE 0 END)
+            + (CASE WHEN path IN (SELECT target_path FROM item_tags WHERE target_type = 'file') THEN 1 ELSE 0 END)
+            + (CASE WHEN ${taggedFoldersCond} THEN 1 ELSE 0 END)
             , 2.0) / 2.0
           + (ABS(RANDOM()) % 10000) * 0.00005
         ) AS score
       FROM media_index
-      WHERE 1=1${servedIn}
+      WHERE 1=1${servedIn}${filter.where}
     ),
     top AS (
       SELECT * FROM scored ORDER BY score DESC LIMIT ${TOP_K}
@@ -170,7 +225,9 @@ function scoreQuery(served: string[]): { path: string; modified_at: number }[] {
     ...fav.favFolders,
     ...fav.likedProfiles,
     ...fav.likedFormats,
+    ...taggedFolderParams,
     ...served,
+    ...filter.params,
   ];
 
   const rows = db.prepare(sql).all(...allParams) as {
@@ -296,12 +353,14 @@ function hydrateBatch(rows: Array<{ path: string; modified_at: number }>): Media
   });
 }
 
-function popPage(sessionId: string, session: FeedSession): FeedPage {
+function popPage(sessionId: string, session: FeedSession, filter: SqlFilter): FeedPage {
   const db = getDb();
-  const rows = scoreQuery([...session.served]);
+  const rows = scoreQuery([...session.served], filter);
 
   if (rows.length === 0 && session.served.size > 0) {
-    const total = db.prepare('SELECT COUNT(*) AS c FROM media_index').get() as { c: number };
+    const total = db
+      .prepare(`SELECT COUNT(*) AS c FROM media_index WHERE 1=1${filter.where}`)
+      .get(...filter.params) as { c: number };
     if (total.c <= session.served.size) {
       // Nenhum novo item → fim do feed
       return { items: [], nextCursor: null };
@@ -309,7 +368,7 @@ function popPage(sessionId: string, session: FeedSession): FeedPage {
     // Ha novos itens → novo ciclo
     session.served.clear();
     session.page = 0;
-    return popPage(sessionId, session);
+    return popPage(sessionId, session, filter);
   }
 
   if (rows.length === 0) {
@@ -330,9 +389,9 @@ export function getForYouPage(cursor: string | undefined): FeedPage | null {
   gcSessions();
 
   if (!cursor) {
-    const sessionId = createFeedSession();
+    const sessionId = createFeedSession(NO_FILTER);
     if (!sessionId) return { items: [], nextCursor: null };
-    return popPage(sessionId, sessions.get(sessionId)!);
+    return popPage(sessionId, sessions.get(sessionId)!, NO_FILTER);
   }
 
   const parts = cursor.split(':');
@@ -341,12 +400,48 @@ export function getForYouPage(cursor: string | undefined): FeedPage | null {
   const sessionId = parts.slice(1, -1).join(':');
   const session = sessions.get(sessionId);
   if (!session) {
-    const newId = createFeedSession();
+    const newId = createFeedSession(NO_FILTER);
     if (!newId) return { items: [], nextCursor: null };
-    return popPage(newId, sessions.get(newId)!);
+    return popPage(newId, sessions.get(newId)!, NO_FILTER);
   }
 
-  return popPage(sessionId, session);
+  return popPage(sessionId, session, NO_FILTER);
+}
+
+/**
+ * Página do feed filtrado por tag. Mesma mecânica do For You (sessão,
+ * paginação por cursor, ciclo infinito), restrita aos itens da tag.
+ * Sessões são namespacadas por tag para não colidirem com o For You.
+ */
+export function getTagFeedPage(tagId: number, cursor: string | undefined): FeedPage {
+  gcSessions();
+  const filter = buildTagFilter(tagId);
+  const ns = `tag${tagId}|`;
+
+  if (!cursor) {
+    const sessionId = createFeedSession(filter);
+    if (!sessionId) return { items: [], nextCursor: null };
+    const nsId = ns + sessionId;
+    sessions.set(nsId, sessions.get(sessionId)!);
+    sessions.delete(sessionId);
+    return popPage(nsId, sessions.get(nsId)!, filter);
+  }
+
+  const parts = cursor.split(':');
+  if (parts[0] !== 'c' || parts.length < 3) return { items: [], nextCursor: null };
+
+  const sessionId = parts.slice(1, -1).join(':');
+  const session = sessionId.startsWith(ns) ? sessions.get(sessionId) : undefined;
+  if (!session) {
+    const newId = createFeedSession(filter);
+    if (!newId) return { items: [], nextCursor: null };
+    const nsId = ns + newId;
+    sessions.set(nsId, sessions.get(newId)!);
+    sessions.delete(newId);
+    return popPage(nsId, sessions.get(nsId)!, filter);
+  }
+
+  return popPage(sessionId, session, filter);
 }
 
 export function resetFeedSession(cursor: string | undefined): void {

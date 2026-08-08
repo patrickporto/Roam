@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
-import { useStore, useFavorites, useProfileMedia } from '../../store';
+import { useStore, useFavorites, useProfileMedia, useItemTags } from '../../store';
 import { getApi } from '../../api';
 import { FeedView } from '../feed/FeedView';
 import { MediaGrid } from '../feed/MediaGrid';
 import { AlbumGrid } from './AlbumGrid';
+import { TagPopover } from '../TagPopover';
 import type { MediaItem, SortOrder } from '../../shared/types';
 
 interface ProfilePageProps {
@@ -26,6 +27,10 @@ export function ProfilePage({ profilePath }: ProfilePageProps) {
     viewAlbum,
     order,
   );
+
+  const currentTarget = viewAlbum ?? profilePath;
+  const targetTags = useItemTags('folder', currentTarget);
+  const [tagPopoverOpen, setTagPopoverOpen] = useState(false);
 
   // Fallback: perfil não estava na lista carregada
   useEffect(() => {
@@ -76,7 +81,6 @@ export function ProfilePage({ profilePath }: ProfilePageProps) {
   }
 
 // ── Modo grade (padrão, estilo perfil do TikTok) ──
-  const currentTarget = viewAlbum ?? profilePath;
   const isFav = favFolders.has(currentTarget);
 
   // Quando vendo álbum específico: mostra só mídias daquele álbum
@@ -117,6 +121,22 @@ export function ProfilePage({ profilePath }: ProfilePageProps) {
               {profile.mediaCount} mídias
               {profile.albums.length > 0 && ` · ${profile.albums.length} álbuns`}
             </span>
+            {targetTags.length > 0 && (
+              <span className="profile-tags">
+                {targetTags.map((t) => (
+                  <button
+                    key={t.id}
+                    className="info-tag-chip"
+                    onClick={() => {
+                      useStore.getState().selectTag(t.id);
+                      useStore.getState().setActiveTab('tags');
+                    }}
+                  >
+                    #{t.name}
+                  </button>
+                ))}
+              </span>
+            )}
           </div>
           <select
             className="sort-select"
@@ -127,6 +147,25 @@ export function ProfilePage({ profilePath }: ProfilePageProps) {
             <option value="recent">Mais recentes</option>
             <option value="oldest">Mais antigas</option>
           </select>
+          <button
+            className={`fav-btn big ${targetTags.length > 0 ? 'tagged' : ''}`}
+            onClick={() => setTagPopoverOpen((o) => !o)}
+            title="Tags"
+          >
+            <svg
+              width="22"
+              height="22"
+              viewBox="0 0 24 24"
+              fill={targetTags.length > 0 ? 'currentColor' : 'none'}
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" />
+              <line x1="7" y1="7" x2="7.01" y2="7" />
+            </svg>
+          </button>
           <button
             className={`fav-btn big ${isFav ? 'favorited' : ''}`}
             onClick={() => toggleFolder(currentTarget)}
@@ -145,6 +184,14 @@ export function ProfilePage({ profilePath }: ProfilePageProps) {
           </button>
         </div>
       </div>
+
+      {tagPopoverOpen && (
+        <TagPopover
+          targetType="folder"
+          targetPath={currentTarget}
+          onClose={() => setTagPopoverOpen(false)}
+        />
+      )}
 
       {/* ── Tabs (só no perfil, não em álbum) ── */}
       {!viewAlbum && (
