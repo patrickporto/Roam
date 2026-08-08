@@ -310,6 +310,19 @@ video.media-el {
   background: #000;
 }
 
+/* zoom/pan */
+.media-card.zoomed {
+  cursor: grab;
+}
+
+.media-card.panning {
+  cursor: grabbing;
+}
+
+.media-card.zoomed .media-el {
+  will-change: transform;
+}
+
 /* gradientes de legibilidade */
 .gradient-top {
   position: absolute;

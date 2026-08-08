@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { MediaItem } from '../../shared/types';
+import { IDENTITY, nextScale, panBy, zoomAt, type ZoomTransform } from '../../shared/zoom';
 import { useStore } from '../../store';
 
 interface MediaCardProps {
@@ -83,14 +84,108 @@ export function MediaCard({
 }: MediaCardProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const imageRef = useRef<HTMLImageElement>(null);
+  const cardRef = useRef<HTMLDivElement>(null);
   const [muted, setMuted] = useState(true);
   const [paused, setPaused] = useState(false);
   const [progress, setProgress] = useState(0);
   const [burst, setBurst] = useState(false);
+  const [zoom, setZoom] = useState<ZoomTransform>(IDENTITY);
+  const [panning, setPanning] = useState(false);
+  const zoomRef = useRef<ZoomTransform>(IDENTITY);
+  const dragRef = useRef<{ startX: number; startY: number; moved: boolean } | null>(null);
+  const suppressClickRef = useRef(false);
   const selectProfile = useStore((s) => s.selectProfile);
 
   const imageFit = useMediaFit(imageRef);
   const videoFit = useMediaFit(videoRef);
+
+  const applyZoom = (t: ZoomTransform) => {
+    zoomRef.current = t;
+    setZoom(t);
+  };
+
+  // Zoom com Ctrl+scroll (também cobre pinch de trackpad, que emite ctrlKey).
+  // Listener nativo não-passivo para poder cancelar a rolagem do feed.
+  useEffect(() => {
+    const el = cardRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey) return;
+      e.preventDefault();
+      const rect = el.getBoundingClientRect();
+      const t = zoomRef.current;
+      applyZoom(zoomAt(t, e.clientX - rect.left, e.clientY - rect.top, nextScale(t.scale, e.deltaY)));
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, []);
+
+  // Reset de zoom por teclado (Esc ou Ctrl+0) apenas no card ativo
+  useEffect(() => {
+    if (!active) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (zoomRef.current.scale === 1) return;
+      if (e.key === 'Escape' || (e.key === '0' && (e.ctrlKey || e.metaKey))) {
+        e.preventDefault();
+        applyZoom(IDENTITY);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [active]);
+
+  // Reset ao trocar de item ou quando o card deixa de ser o ativo
+  useEffect(() => {
+    applyZoom(IDENTITY);
+  }, [item.path]);
+  useEffect(() => {
+    if (!active) applyZoom(IDENTITY);
+  }, [active]);
+
+  // Pan por arrasto quando ampliado (apenas iniciando sobre a mídia)
+  const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (zoomRef.current.scale === 1 || e.button !== 0) return;
+    const target = e.target as HTMLElement;
+    if (!(target instanceof HTMLImageElement) && !(target instanceof HTMLVideoElement)) return;
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    dragRef.current = { startX: e.clientX, startY: e.clientY, moved: false };
+    setPanning(true);
+  };
+
+  const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (!drag) return;
+    const dx = e.clientX - drag.startX;
+    const dy = e.clientY - drag.startY;
+    if (Math.abs(dx) + Math.abs(dy) > 4) drag.moved = true;
+    applyZoom(panBy(zoomRef.current, dx, dy));
+    drag.startX = e.clientX;
+    drag.startY = e.clientY;
+  };
+
+  const handlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (!drag) return;
+    dragRef.current = null;
+    setPanning(false);
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+    // Evita que o clique residual do arrasto pause o vídeo
+    if (drag.moved) {
+      suppressClickRef.current = true;
+      window.setTimeout(() => { suppressClickRef.current = false; }, 0);
+    }
+  };
+
+  const zoomed = zoom.scale > 1;
+  const zoomStyle: React.CSSProperties = zoomed
+    ? {
+        transform: `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.scale})`,
+        transformOrigin: '0 0',
+      }
+    : {};
 
   const profileName = item.profilePath.split(/[\\/]/).pop() ?? '';
   const albumName = item.albumPath?.split(/[\\/]/).pop() ?? null;
@@ -111,6 +206,7 @@ export function MediaCard({
   }, [active, item.type]);
 
   const handleVideoClick = () => {
+    if (suppressClickRef.current) return;
     const vid = videoRef.current;
     if (!vid) return;
     if (vid.paused) {
@@ -144,7 +240,15 @@ export function MediaCard({
   };
 
   return (
-    <div className="media-card" onDoubleClick={handleDoubleClick}>
+    <div
+      ref={cardRef}
+      className={`media-card${zoomed ? ' zoomed' : ''}${panning ? ' panning' : ''}`}
+      onDoubleClick={handleDoubleClick}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerUp}
+      onPointerCancel={handlePointerUp}
+    >
       {item.type === 'image' ? (
         <img
           ref={imageRef}
@@ -153,7 +257,7 @@ export function MediaCard({
           alt={item.name}
           loading="lazy"
           draggable={false}
-          style={{ objectFit: imageFit }}
+          style={{ objectFit: imageFit, ...zoomStyle }}
         />
       ) : (
         <video
@@ -163,10 +267,11 @@ export function MediaCard({
           muted={muted}
           loop
           playsInline
+          draggable={false}
           preload={active ? 'auto' : 'metadata'}
           onClick={handleVideoClick}
           onTimeUpdate={handleTimeUpdate}
-          style={{ objectFit: videoFit }}
+          style={{ objectFit: videoFit, ...zoomStyle }}
         />
       )}
 
