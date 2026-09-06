@@ -33,7 +33,7 @@ function createWindow(): void {
   mainWindow.setMenu(null);
 
   if (isDev) {
-    mainWindow.loadURL('http://localhost:5173');
+    mainWindow.loadURL('http://localhost:5174');
     mainWindow.webContents.openDevTools({ mode: 'detach' });
   } else {
     const indexPath = path.join(__dirname, '../../dist/index.html');

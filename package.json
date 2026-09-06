@@ -5,7 +5,7 @@
   "main": "dist-electron/electron/main.js",
   "private": true,
   "scripts": {
-    "dev": "concurrently -k \"vite\" \"wait-on http://localhost:5173 && tsc -p tsconfig.electron.json && electron . --dev\"",
+    "dev": "concurrently -k \"vite\" \"wait-on http://localhost:5174 && tsc -p tsconfig.electron.json && electron . --dev\"",
     "build": "tsc -p tsconfig.electron.json && vite build",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.electron.json",
     "test": "vitest run",
