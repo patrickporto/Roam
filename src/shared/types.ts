@@ -123,6 +123,12 @@ export interface RoamApi {
     updateRootKind(rootPath: string, kind: RootKind): Promise<Profile[]>;
     list(): Promise<Profile[]>;
     getProfile(profilePath: string): Promise<Profile | null>;
+    /**
+     * Reindexa apenas a pasta do perfil (scan escopado) e retorna o perfil
+     * atualizado; null se a pasta não existe mais no disco ou não pertence
+     * a nenhuma raiz registrada.
+     */
+    refreshProfile(profilePath: string): Promise<Profile | null>;
     /** Lista mídia achatada de um escopo (perfil ou álbum), paginada e ordenada. */
     listMedia(scope: MediaScope, cursor?: string, order?: SortOrder): Promise<FeedPage>;
   };

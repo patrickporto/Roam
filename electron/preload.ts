@@ -13,6 +13,8 @@ const api: RoamApi = {
     list: () => ipcRenderer.invoke('library:list'),
     getProfile: (profilePath: string) =>
       ipcRenderer.invoke('library:getProfile', profilePath),
+    refreshProfile: (profilePath: string) =>
+      ipcRenderer.invoke('library:refreshProfile', profilePath),
     listMedia: (scope: MediaScope, cursor?: string, order?: SortOrder) =>
       ipcRenderer.invoke('library:listMedia', scope, cursor, order),
   },

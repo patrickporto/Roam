@@ -1,5 +1,6 @@
 import { ipcMain, dialog, BrowserWindow, shell } from 'electron';
 import { promises as fs } from 'fs';
+import path from 'path';
 import { getDb } from '../services/db';
 import { scanRoot, ScanCallbacks } from '../services/mediaScanner';
 import {
@@ -27,6 +28,7 @@ import { refreshRoots } from '../services/mediaProtocol';
 import type {
   ScanProgress,
   RootKind,
+  MediaItem,
   MediaScope,
   SortOrder,
   FavoriteTargetType,
@@ -84,10 +86,9 @@ export function registerIpcHandlers(): void {
   );
 
   ipcMain.handle('library:removeRoot', async (_e, rootPath: string) => {
-    // Cancel any ongoing scan before deleting from DB to avoid FK violations.
-    const existing = activeScans.get(rootPath);
-    if (existing) existing.cancel();
-    activeScans.delete(rootPath);
+    // Cancel any ongoing scan (raiz ou perfis sob ela) before deleting from
+    // DB to avoid FK violations.
+    cancelScansIntersecting(rootPath);
 
     const db = getDb();
     db.prepare(`DELETE FROM media_index WHERE root_path = ?`).run(rootPath);
@@ -96,6 +97,9 @@ export function registerIpcHandlers(): void {
       rootPath + '%',
     );
     db.prepare(`DELETE FROM item_tags WHERE target_path LIKE ?`).run(
+      rootPath + '%',
+    );
+    db.prepare(`DELETE FROM shown_history WHERE media_path LIKE ?`).run(
       rootPath + '%',
     );
     refreshRoots();
@@ -107,6 +111,58 @@ export function registerIpcHandlers(): void {
   ipcMain.handle('library:getProfile', async (_e, profilePath: string) => {
     return getProfile(profilePath);
   });
+
+  ipcMain.handle(
+    'library:refreshProfile',
+    async (_e, profilePath: string) => {
+      const root = findContainingRoot(profilePath);
+      if (!root) return null;
+
+      // Exclusão mútua: cancela scan ativo do perfil ou da raiz que o contém
+      cancelScansIntersecting(profilePath);
+
+      let cancelled = false;
+      const handle = {
+        cancel: () => {
+          cancelled = true;
+        },
+      };
+      activeScans.set(profilePath, handle);
+
+      const callbacks: ScanCallbacks = {
+        shouldCancel: () => cancelled,
+        onProgress: (progress: ScanProgress) => {
+          persistScanItems(root.path, progress.items);
+          const mainWin = BrowserWindow.getAllWindows()[0];
+          if (mainWin && !mainWin.isDestroyed()) {
+            mainWin.webContents.send('scan:progress', progress);
+          }
+        },
+      };
+
+      const scanStartedAt = Date.now();
+
+      try {
+        const result = await scanRoot(root.path, callbacks, root.kind, profilePath);
+        if (!result.cancelled) {
+          const exists = await reconcileProfile(
+            profilePath,
+            scanStartedAt,
+            result.errors,
+          );
+          if (!exists) return null;
+        }
+      } finally {
+        // Só remove se ainda for o handle deste scan — um scan mais novo
+        // pode ter registrado outro handle sob a mesma chave
+        if (activeScans.get(profilePath) === handle) {
+          activeScans.delete(profilePath);
+        }
+      }
+
+      return getProfile(profilePath);
+    },
+  );
 
   ipcMain.handle(
     'library:listMedia',
@@ -228,10 +284,139 @@ export async function rescanAllRoots(): Promise<void> {
   }
 }
 
+/**
+ * Persiste um lote de itens no índice, com guarda contra raiz removida
+ * no meio do scan (evita violação da FK de root_path).
+ */
+function persistScanItems(rootPath: string, items: MediaItem[]): void {
+  if (items.length === 0) return;
+  const db = getDb();
+  const rootExists = db
+    .prepare(`SELECT 1 FROM roots WHERE path = ?`)
+    .get(rootPath);
+  if (!rootExists) return;
+
+  const insert = db.prepare(`
+    INSERT OR REPLACE INTO media_index
+      (path, root_path, profile_path, album_path, type, format, size, created_at, modified_at, keywords, indexed_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  const tx = db.transaction(() => {
+    for (const item of items) {
+      insert.run(
+        item.path,
+        item.rootPath,
+        item.profilePath,
+        item.albumPath,
+        item.type,
+        item.format,
+        item.size,
+        item.createdAt,
+        item.modifiedAt,
+        item.keywords.join(','),
+        Date.now(),
+      );
+    }
+  });
+  tx();
+}
+
+/**
+ * Encontra a raiz registrada que contém o perfil (prefix match mais longo,
+ * case-insensitive, separadores normalizados). Null se o perfil não
+ * pertence a nenhuma raiz.
+ */
+function findContainingRoot(
+  profilePath: string,
+): { path: string; kind: RootKind } | null {
+  const db = getDb();
+  const roots = db
+    .prepare(`SELECT path, kind FROM roots`)
+    .all() as { path: string; kind: RootKind }[];
+  const normalize = (p: string) =>
+    p.replace(/[\\/]+/g, path.sep).replace(/[\\/]+$/, '').toLowerCase();
+  const target = normalize(profilePath);
+
+  let best: { path: string; kind: RootKind } | null = null;
+  for (const root of roots) {
+    const rp = normalize(root.path);
+    if (target === rp || target.startsWith(rp + path.sep)) {
+      if (!best || root.path.length > best.path.length) best = root;
+    }
+  }
+  return best;
+}
+
+/**
+ * Cancela todos os scans cujo escopo intersecta `scope` (o próprio escopo,
+ * um ancestral como a raiz, ou um descendente como um perfil sob a raiz).
+ * Garante exclusão mútua entre scan de raiz e refresh de perfil.
+ */
+function cancelScansIntersecting(scope: string): void {
+  const normalize = (p: string) =>
+    p.replace(/[\\/]+/g, path.sep).replace(/[\\/]+$/, '').toLowerCase();
+  const target = normalize(scope);
+  for (const [key, handle] of activeScans) {
+    const k = normalize(key);
+    if (
+      k === target ||
+      k.startsWith(target + path.sep) ||
+      target.startsWith(k + path.sep)
+    ) {
+      handle.cancel();
+      activeScans.delete(key);
+    }
+  }
+}
+
+/**
+ * Reconcilia o índice de um único perfil após scan escopado:
+ * - Pasta do perfil sumiu do disco: apaga as entradas do perfil e os dados
+ *   associados sob o path (favoritos, tags).
+ * - Scan sem erros de leitura: remove entradas do perfil não revalidadas
+ *   (indexed_at anterior ao início do scan = arquivo/pasta deletado).
+ * Com erros de leitura, não poda: um diretório ilegível transitório
+ * apagaria itens válidos do índice. Retorna false se o perfil não existe mais.
+ */
+async function reconcileProfile(
+  profilePath: string,
+  scanStartedAt: number,
+  errors: number,
+): Promise<boolean> {
+  const db = getDb();
+  const profileExists = await fs
+    .stat(profilePath)
+    .then(() => true)
+    .catch(() => false);
+
+  if (!profileExists) {
+    const removed = db
+      .prepare(`DELETE FROM media_index WHERE profile_path = ? COLLATE NOCASE`)
+      .run(profilePath);
+    db.prepare(`DELETE FROM favorites WHERE target_path LIKE ?`).run(profilePath + '%');
+    db.prepare(`DELETE FROM item_tags WHERE target_path LIKE ?`).run(profilePath + '%');
+    db.prepare(`DELETE FROM shown_history WHERE media_path LIKE ?`).run(profilePath + '%');
+    if (removed.changes > 0) clearFeedSessions();
+    return false;
+  }
+
+  if (errors > 0) return true;
+
+  const pruned = db
+    .prepare(
+      `DELETE FROM media_index WHERE profile_path = ? COLLATE NOCASE AND indexed_at < ?`,
+    )
+    .run(profilePath, scanStartedAt);
+  if (pruned.changes > 0) {
+    clearFeedSessions();
+  }
+  return true;
+}
+
 async function startScanForRoot(rootPath: string): Promise<void> {
-  // Cancel any existing scan on this root
-  const existing = activeScans.get(rootPath);
-  if (existing) existing.cancel();
+  // Exclusão mútua: cancela scan ativo da raiz ou de perfis sob ela
+  cancelScansIntersecting(rootPath);
 
   const db = getDb();
   const kindRow = db
@@ -250,40 +435,7 @@ async function startScanForRoot(rootPath: string): Promise<void> {
   const callbacks: ScanCallbacks = {
     shouldCancel: () => cancelled,
     onProgress: (progress: ScanProgress) => {
-      // persist to DB as items arrive
-      if (progress.items.length > 0) {
-        const db = getDb();
-        // Guard: skip if root was deleted mid-scan (avoids FK constraint error).
-        const rootExists = db
-          .prepare(`SELECT 1 FROM roots WHERE path = ?`)
-          .get(rootPath);
-        if (rootExists) {
-          const insert = db.prepare(`
-            INSERT OR REPLACE INTO media_index
-              (path, root_path, profile_path, album_path, type, format, size, created_at, modified_at, keywords, indexed_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          `);
-
-          const tx = db.transaction(() => {
-            for (const item of progress.items) {
-              insert.run(
-                item.path,
-                item.rootPath,
-                item.profilePath,
-                item.albumPath,
-                item.type,
-                item.format,
-                item.size,
-                item.createdAt,
-                item.modifiedAt,
-                item.keywords.join(','),
-                Date.now(),
-              );
-            }
-          });
-          tx();
-        }
-      }
+      persistScanItems(rootPath, progress.items);
 
       // Forward progress to renderer
       const mainWin = BrowserWindow.getAllWindows()[0];
@@ -301,7 +453,10 @@ async function startScanForRoot(rootPath: string): Promise<void> {
       await reconcileRoot(rootPath, scanStartedAt, result.errors);
     }
   } finally {
-    activeScans.delete(rootPath);
+    // Só remove se ainda for o handle deste scan (ver comentário no refresh de perfil)
+    if (activeScans.get(rootPath) === handle) {
+      activeScans.delete(rootPath);
+    }
   }
 }
 
@@ -326,6 +481,7 @@ async function reconcileRoot(
     db.prepare(`DELETE FROM roots WHERE path = ?`).run(rootPath);
     db.prepare(`DELETE FROM favorites WHERE target_path LIKE ?`).run(rootPath + '%');
     db.prepare(`DELETE FROM item_tags WHERE target_path LIKE ?`).run(rootPath + '%');
+    db.prepare(`DELETE FROM shown_history WHERE media_path LIKE ?`).run(rootPath + '%');
     refreshRoots();
     clearFeedSessions();
     return;

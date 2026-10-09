@@ -322,4 +322,96 @@ describe('mediaScanner', () => {
       expect(result.items.length).toBeLessThan(200);
     });
   });
+
+  describe('scanRoot - scopePath (refresh de perfil)', () => {
+    it('varre só a subárvore do perfil, com classificação relativa à raiz container', async () => {
+      await createFile('scoped-hub/ana/fotos/f1.jpg');
+      await createFile('scoped-hub/ana/f2.jpg');
+      await createFile('scoped-hub/bruno/video.mp4');
+
+      const rootDir = path.join(tmpDir, 'scoped-hub');
+      const anaDir = path.join(rootDir, 'ana');
+      const items: MediaItem[] = [];
+
+      await scanRoot(rootDir, {
+        onProgress(p: ScanProgress) {
+          items.push(...p.items);
+        },
+        shouldCancel: () => false,
+      }, 'container', anaDir);
+
+      // só os itens de ana; bruno não é varrido
+      expect(items.length).toBe(2);
+
+      // classificação idêntica à do scan da raiz inteira
+      const f1 = items.find((i) => i.name === 'f1.jpg')!;
+      expect(f1.rootPath).toBe(rootDir);
+      expect(f1.profilePath).toBe(anaDir);
+      expect(f1.albumPath).toBe(path.join(anaDir, 'fotos'));
+
+      const f2 = items.find((i) => i.name === 'f2.jpg')!;
+      expect(f2.rootPath).toBe(rootDir);
+      expect(f2.profilePath).toBe(anaDir);
+      expect(f2.albumPath).toBeNull();
+    });
+
+    it('scopePath em álbum varre só o álbum mantendo perfil/álbum corretos', async () => {
+      await createFile('scoped-album/ana/fotos/f1.jpg');
+      await createFile('scoped-album/ana/f2.jpg');
+
+      const rootDir = path.join(tmpDir, 'scoped-album');
+      const anaDir = path.join(rootDir, 'ana');
+      const fotosDir = path.join(anaDir, 'fotos');
+      const items: MediaItem[] = [];
+
+      await scanRoot(rootDir, {
+        onProgress(p: ScanProgress) {
+          items.push(...p.items);
+        },
+        shouldCancel: () => false,
+      }, 'container', fotosDir);
+
+      expect(items.length).toBe(1);
+      expect(items[0].name).toBe('f1.jpg');
+      expect(items[0].profilePath).toBe(anaDir);
+      expect(items[0].albumPath).toBe(fotosDir);
+    });
+
+    it('scopePath igual à raiz profile equivale ao scan completo', async () => {
+      await createFile('scoped-viagens/praia/f1.jpg');
+      await createFile('scoped-viagens/f2.jpg');
+
+      const rootDir = path.join(tmpDir, 'scoped-viagens');
+      const items: MediaItem[] = [];
+
+      await scanRoot(rootDir, {
+        onProgress(p: ScanProgress) {
+          items.push(...p.items);
+        },
+        shouldCancel: () => false,
+      }, 'profile', rootDir);
+
+      expect(items.length).toBe(2);
+      const f1 = items.find((i) => i.name === 'f1.jpg')!;
+      expect(f1.profilePath).toBe(rootDir);
+      expect(f1.albumPath).toBe(path.join(rootDir, 'praia'));
+    });
+
+    it('scopePath inexistente retorna erro sem itens', async () => {
+      const rootDir = path.join(tmpDir, 'scoped-hub');
+      const ghostDir = path.join(rootDir, 'fantasma');
+      const items: MediaItem[] = [];
+
+      const result = await scanRoot(rootDir, {
+        onProgress(p: ScanProgress) {
+          items.push(...p.items);
+        },
+        shouldCancel: () => false,
+      }, 'container', ghostDir);
+
+      expect(items.length).toBe(0);
+      expect(result.errors).toBeGreaterThan(0);
+      expect(result.cancelled).toBe(false);
+    });
+  });
 });

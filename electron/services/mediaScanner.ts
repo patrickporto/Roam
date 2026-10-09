@@ -265,7 +265,12 @@ export async function scanRoot(
   rootPath: string,
   callbacks: ScanCallbacks,
   kind: RootKind = 'profile',
+  scopePath?: string,
 ): Promise<{ items: MediaItem[]; errors: number; cancelled: boolean }> {
+  // scopePath limita o início da travessia (ex.: refresh de um único perfil),
+  // mas a classificação (profile_path/album_path/root_path) continua
+  // relativa à raiz registrada, produzindo itens idênticos ao scan completo.
+  const startPath = scopePath ?? rootPath;
   const visited = new Set<string>();
   const queue: string[] = [];
   const allItems: MediaItem[] = [];
@@ -274,9 +279,9 @@ export async function scanRoot(
   let cancelled = false;
 
   try {
-    const rootReal = await fs.realpath(rootPath).catch(() => rootPath);
+    const rootReal = await fs.realpath(startPath).catch(() => startPath);
     visited.add(rootReal);
-    queue.push(rootPath);
+    queue.push(startPath);
   } catch {
     return { items: [], errors: 1, cancelled: false };
   }

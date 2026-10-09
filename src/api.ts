@@ -135,6 +135,7 @@ function installMockApi(): RoamApi {
         profileNames.map((p) => buildProfile(`${containerRoot}/${p}`)),
       list: async () => profileNames.map((p) => buildProfile(`${containerRoot}/${p}`)),
       getProfile: async (profilePath: string) => buildProfile(profilePath),
+      refreshProfile: async (profilePath: string) => buildProfile(profilePath),
       listMedia: async (scope: MediaScope, cursor?: string, order?: 'recent' | 'oldest' | 'recommended') => {
         let items = allItems.filter((i) =>
           scope.albumPath
