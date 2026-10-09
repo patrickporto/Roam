@@ -20,8 +20,12 @@ let mockDb: {
   favs: { target_type: string; target_path: string }[];
 };
 
+/** Queries passadas a prepare().run() — para asserções sobre escritas. */
+let runCalls: string[];
+
 function resetMockDb() {
   mockDb = { media: [], favs: [] };
+  runCalls = [];
 }
 
 function makeMockItem(i: number, overrides: Partial<MockRow> = {}): MockRow {
@@ -114,6 +118,7 @@ vi.mock('../electron/services/db', () => ({
           return [];
         },
         run: (...args: any[]) => {
+          runCalls.push(q);
           return { changes: 1 };
         },
       };
@@ -309,5 +314,68 @@ describe('recommendation - For You feed', () => {
     // Count unique profiles
     const profiles = new Set(page!.items.map((item) => item.profilePath));
     expect(profiles.size).toBeGreaterThan(1); // At least 2 different profiles
+  });
+
+  it('inclui itens muito antigos (>180d) na cota de faixa', () => {
+    const now = Date.now();
+    const DAY = 86_400_000;
+    // perfis únicos por item para isolar as cotas dos limites de diversidade
+    const recent = Array.from({ length: 30 }, (_, i) =>
+      makeMockItem(i, {
+        profile_path: `/rootR/creator${i}`,
+        modified_at: now - DAY * i,
+      }),
+    );
+    const old = Array.from({ length: 30 }, (_, i) =>
+      makeMockItem(i + 30, {
+        profile_path: `/rootO/creator${i}`,
+        modified_at: now - DAY * (40 + i),
+      }),
+    );
+    const veryOld = Array.from({ length: 30 }, (_, i) =>
+      makeMockItem(i + 60, {
+        profile_path: `/rootV/creator${i}`,
+        modified_at: now - DAY * (200 + i),
+      }),
+    );
+    mockDb.media = [...recent, ...old, ...veryOld];
+
+    const page = getForYouPage(undefined);
+    expect(page).not.toBeNull();
+
+    const veryOldItems = page!.items.filter(
+      (item) => now - item.modifiedAt >= 180 * DAY,
+    );
+    // cota de muito antigos: exatamente 3 quando há estoque suficiente
+    expect(veryOldItems.length).toBe(3);
+  });
+
+  it('redistribui slots quando uma faixa esgota', () => {
+    const now = Date.now();
+    const DAY = 86_400_000;
+    // só itens muito antigos, perfis únicos
+    const items = Array.from({ length: 25 }, (_, i) =>
+      makeMockItem(i, {
+        profile_path: `/rootV/creator${i}`,
+        modified_at: now - DAY * (200 + i),
+      }),
+    );
+    mockDb.media = items;
+
+    const page = getForYouPage(undefined);
+    expect(page).not.toBeNull();
+    // cotas de recente/antigo vazias cedem slots: página cheia com 20 itens
+    expect(page!.items.length).toBe(20);
+  });
+
+  it('registra exibicao em shown_history ao servir pagina', () => {
+    const items = Array.from({ length: 10 }, (_, i) =>
+      makeMockItem(i, { profile_path: `/root${i}/creator${i}` }),
+    );
+    mockDb.media = items;
+
+    const page = getForYouPage(undefined);
+    expect(page!.items.length).toBeGreaterThan(0);
+    expect(runCalls.some((q) => q.includes('insert into shown_history'))).toBe(true);
   });
 });

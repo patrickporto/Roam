@@ -50,6 +50,15 @@ function tagMatches(path: string, tagId: number): boolean {
   });
 }
 
+/**
+ * Extrai o tagId dos args: a query de scoring inclui timestamps (now) como
+ * params numéricos antes do tagId — tagIds são inteiros pequenos, timestamps
+ * são ~1e12.
+ */
+function findTagId(args: any[]): number {
+  return args.find((a) => typeof a === 'number' && a > 0 && a < 1e9) as number;
+}
+
 vi.mock('../electron/services/db', () => ({
   getDb: () => ({
     prepare: (query: string) => {
@@ -59,7 +68,7 @@ vi.mock('../electron/services/db', () => ({
           // SELECT COUNT(*) ... FROM media_index (com ou sem filtro de tag)
           if (q.includes('count(*)') && q.includes('media_index')) {
             if (q.includes('item_tags where tag_id')) {
-              const tagId = args.find((a) => typeof a === 'number') as number;
+              const tagId = findTagId(args);
               return { c: mockDb.media.filter((m) => tagMatches(m.path, tagId)).length };
             }
             return { c: mockDb.media.length };
@@ -78,7 +87,7 @@ vi.mock('../electron/services/db', () => ({
 
             // Filtro de tag (cláusula com item_tags tag_id)
             if (q.includes('item_tags where tag_id')) {
-              const tagId = args.find((a) => typeof a === 'number') as number;
+              const tagId = findTagId(args);
               rows = rows.filter((m) => tagMatches(m.path, tagId));
             }
 
@@ -122,6 +131,9 @@ vi.mock('../electron/services/db', () => ({
         },
         run: () => ({ changes: 1 }),
       };
+    },
+    transaction: (fn: () => void) => {
+      return () => fn();
     },
   }),
 }));

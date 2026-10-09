@@ -8,7 +8,24 @@ const CANDIDATE_POOL = 120; // candidatos sorteados pelo SQL por página
 const SESSION_TTL = 30 * 60 * 1000;
 const MAX_PER_PROFILE = 3; // máximo de itens por perfil por página
 const MAX_PER_ALBUM = 2; // máximo de itens por álbum por página
-const RECENT_RATIO = 0.65; // proporção de itens recentes (~65%)
+
+// Faixas de idade (ms)
+const OLD_MS = 30 * 24 * 60 * 60 * 1000; // 30 dias
+const VERY_OLD_MS = 180 * 24 * 60 * 60 * 1000; // 180 dias
+
+// Cotas por faixa por página (~60% / ~25% / ~15%); soma = PAGE_SIZE
+const QUOTA_RECENT = 12;
+const QUOTA_OLD = 5;
+const QUOTA_VERY_OLD = 3;
+
+// Anti-repetição: itens exibidos perdem até SHOWN_PENALTY de score,
+// decaindo linearmente ao longo do cooldown (nunca exclui — feed infinito).
+const SHOWN_PENALTY = 0.6;
+const COOLDOWN_MS = 24 * 60 * 60 * 1000; // 24h
+
+// Ruído para quebrar empates no score (máx ~0.05). Deve ser bem menor que
+// SHOWN_PENALTY e o boost de favoritos, senão anula ambos.
+const RANDOM_WEIGHT = 0.000005;
 
 interface FeedSession {
   served: Set<string>;
@@ -31,6 +48,25 @@ function gcSessions(): void {
   for (const [id, s] of sessions) {
     if (now - s.createdAt > SESSION_TTL) sessions.delete(id);
   }
+  // Poda registros de exibição fora do cooldown (a penalidade já seria zero)
+  getDb()
+    .prepare(`DELETE FROM shown_history WHERE shown_at < ?`)
+    .run(now - COOLDOWN_MS);
+}
+
+/** Registra a exibição dos itens servidos (upsert em batch). */
+function recordShown(paths: string[]): void {
+  if (paths.length === 0) return;
+  const db = getDb();
+  const upsert = db.prepare(
+    `INSERT INTO shown_history (media_path, shown_at) VALUES (?, ?)
+     ON CONFLICT(media_path) DO UPDATE SET shown_at = excluded.shown_at`,
+  );
+  const now = Date.now();
+  const tx = db.transaction(() => {
+    for (const p of paths) upsert.run(p, now);
+  });
+  tx();
 }
 
 /** Descarta todas as sessões (chamado quando a biblioteca muda). */
@@ -143,11 +179,15 @@ function gatherFavParams(): {
 /**
  * Query SQL que materializa o scoring com diversidade e aleatoriedade:
  *
- *   - Recency: decai exponencialmente com a idade em ms.
+ *   - Recency por faixas: recente <30d = 1.0, antigo 30–180d = 0.5,
+ *     muito antigo >180d = 0.3 (piso não-zero: itens de anos atrás continuam
+ *     competitivos, ao contrário do decaimento exponencial que os zerava).
  *   - Fav boost: +1 profile IN folders, +1 album IN folders, +0.5 profile IN liked, +0.5 format IN liked.
- *   - Random: ABS(RANDOM()) com peso significativo para quebrar ordem cronológica.
+ *   - Cooldown: -SHOWN_PENALTY para itens exibidos nas últimas 24h,
+ *     decaindo linearmente (anti-repetição entre sessões e ciclos).
+ *   - Random: ABS(RANDOM()) com peso pequeno para quebrar empates.
  *   - Diversity: aplica limite por perfil e álbum no lado do JS após o SQL.
- *   - Recency mix: separa recentes e antigos, misturando conforme RECENT_RATIO.
+ *   - Recency mix: separa faixas de idade, misturando conforme as cotas.
  *
  * O pool é limitado a CANDIDATE_POOL para evitar varrer milhões de linhas a cada página.
  * Dentro do pool, excluímos o que já foi servido nesta sessão.
@@ -155,6 +195,7 @@ function gatherFavParams(): {
 function scoreQuery(served: string[], filter: SqlFilter): { path: string; modified_at: number }[] {
   const db = getDb();
   const fav = gatherFavParams();
+  const nowMs = Date.now();
 
   const favFoldersIn = fav.favFolders.length > 0
     ? `(${fav.favFolders.map(() => '?').join(',')})`
@@ -179,55 +220,81 @@ function scoreQuery(served: string[], filter: SqlFilter): { path: string; modifi
     ? ` AND path NOT IN (${served.map(() => '?').join(',')})`
     : '';
 
-  // Pool misto: TOP_K melhores por score + amostra aleatória dos demais.
-  // Sem a amostra aleatória, itens antigos/sem sinal de favorito nunca
-  // entrariam no pool (o LIMIT ficaria só com recents) e a cota de itens
-  // antigos do applyDiversity nunca seria preenchida.
+  // Pool misto: TOP_K melhores por score + amostra garantida de muito
+  // antigos + amostra aleatória dos demais. Sem as amostras, itens sem
+  // sinal de favorito nunca entrariam no pool e as cotas de faixas
+  // antigas do applyDiversity nunca seriam preenchidas.
+  // Nota: o scoring é O(tamanho do índice) por página (RANDOM + JOIN por
+  // linha); se bibliotecas chegarem a 10⁵–10⁶ itens, pré-filtrar por
+  // faixas de modified_at antes de pontuar.
   const TOP_K = 80;
+  const VERYOLD_POOL = 15;
+  const REST_POOL = CANDIDATE_POOL - TOP_K - VERYOLD_POOL;
 
   const sql = `
     WITH scored AS (
       SELECT
-        path,
-        modified_at,
-        profile_path,
-        album_path,
+        m.path,
+        m.modified_at,
+        m.profile_path,
+        m.album_path,
         (
-          0.4 * (1.0 / (1.0 + (strftime('%s','now') * 1000.0 - modified_at) / 864000000.0))
+          0.4 * (CASE
+            WHEN (? - m.modified_at) < ${OLD_MS} THEN 1.0
+            WHEN (? - m.modified_at) < ${VERY_OLD_MS} THEN 0.5
+            ELSE 0.3
+          END)
           + 0.3 * MIN(
-              (CASE WHEN profile_path IN ${favFoldersIn} THEN 1 ELSE 0 END)
-            + (CASE WHEN album_path IN ${favFoldersIn} THEN 1 ELSE 0 END)
-            + (CASE WHEN profile_path IN ${likedProfilesIn} THEN 0.5 ELSE 0 END)
-            + (CASE WHEN format IN ${likedFormatsIn} THEN 0.5 ELSE 0 END)
-            + (CASE WHEN path IN (SELECT target_path FROM item_tags WHERE target_type = 'file') THEN 1 ELSE 0 END)
+              (CASE WHEN m.profile_path IN ${favFoldersIn} THEN 1 ELSE 0 END)
+            + (CASE WHEN m.album_path IN ${favFoldersIn} THEN 1 ELSE 0 END)
+            + (CASE WHEN m.profile_path IN ${likedProfilesIn} THEN 0.5 ELSE 0 END)
+            + (CASE WHEN m.format IN ${likedFormatsIn} THEN 0.5 ELSE 0 END)
+            + (CASE WHEN m.path IN (SELECT target_path FROM item_tags WHERE target_type = 'file') THEN 1 ELSE 0 END)
             + (CASE WHEN ${taggedFoldersCond} THEN 1 ELSE 0 END)
             , 2.0) / 2.0
-          + (ABS(RANDOM()) % 10000) * 0.00005
+          + (ABS(RANDOM()) % 10000) * ${RANDOM_WEIGHT}
+          - ${SHOWN_PENALTY} * (CASE WHEN sh.shown_at IS NULL THEN 0.0
+              ELSE MIN(1.0, MAX(0.0, 1.0 - (? - sh.shown_at) / ${COOLDOWN_MS}.0)) END)
         ) AS score
-      FROM media_index
+      FROM media_index m
+      LEFT JOIN shown_history sh ON sh.media_path = m.path
       WHERE 1=1${servedIn}${filter.where}
     ),
     top AS (
       SELECT * FROM scored ORDER BY score DESC LIMIT ${TOP_K}
     ),
+    veryold AS (
+      SELECT * FROM scored
+      WHERE path NOT IN (SELECT path FROM top)
+        AND (? - modified_at) >= ${VERY_OLD_MS}
+      ORDER BY ABS(RANDOM())
+      LIMIT ${VERYOLD_POOL}
+    ),
     rest AS (
       SELECT * FROM scored
       WHERE path NOT IN (SELECT path FROM top)
+        AND path NOT IN (SELECT path FROM veryold)
       ORDER BY ABS(RANDOM())
-      LIMIT ${CANDIDATE_POOL - TOP_K}
+      LIMIT ${REST_POOL}
     )
     SELECT * FROM top
+    UNION ALL
+    SELECT * FROM veryold
     UNION ALL
     SELECT * FROM rest`;
 
   const allParams = [
+    nowMs, // faixa recente
+    nowMs, // faixa antiga
     ...fav.favFolders,
     ...fav.favFolders,
     ...fav.likedProfiles,
     ...fav.likedFormats,
     ...taggedFolderParams,
+    nowMs, // cooldown
     ...served,
     ...filter.params,
+    nowMs, // amostra veryold
   ];
 
   const rows = db.prepare(sql).all(...allParams) as {
@@ -238,15 +305,20 @@ function scoreQuery(served: string[], filter: SqlFilter): { path: string; modifi
     score: number;
   }[];
 
-  return applyDiversity(rows);
+  return applyDiversity(rows, nowMs);
 }
 
 /**
- * Aplica restrições de diversidade e mistura de recência sobre os candidatos.
+ * Aplica restrições de diversidade e mistura de faixas de idade sobre os candidatos.
  *
- * 1. Separa recentes (modified_at > 30 dias) e antigos.
- * 2. Embaralha cada grupo independentemente.
- * 3. Pega ~65% recentes e ~35% antigos.
+ * 1. Separa recentes (<30d), antigos (30–180d) e muito antigos (>180d).
+ * 2. Ordena cada faixa por score (desc): itens em cooldown de exibição
+ *    afundam dentro da faixa — essencial para bibliotecas menores que o
+ *    pool, onde tudo sempre é candidato. O ruído (RANDOM_WEIGHT) embaralha
+ *    itens de score igual.
+ * 3. Preenche as cotas de cada faixa; slots não preenchidos são
+ *    redistribuídos às faixas com sobras, na ordem recente → antigo →
+ *    muito antigo (viés de recência intencional).
  * 4. Aplica limite por perfil (MAX_PER_PROFILE) e álbum (MAX_PER_ALBUM).
  * 5. Retorna no máximo PAGE_SIZE itens.
  */
@@ -256,26 +328,36 @@ function applyDiversity(rows: Array<{
   profile_path: string;
   album_path: string | null;
   score: number;
-}>): { path: string; modified_at: number }[] {
+}>, nowMs: number): { path: string; modified_at: number }[] {
   if (rows.length === 0) return [];
 
-  const now = Date.now();
-  const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
+  const recent = rows.filter((r) => (nowMs - r.modified_at) < OLD_MS);
+  const old = rows.filter((r) => {
+    const age = nowMs - r.modified_at;
+    return age >= OLD_MS && age < VERY_OLD_MS;
+  });
+  const veryOld = rows.filter((r) => (nowMs - r.modified_at) >= VERY_OLD_MS);
 
-  const recent = rows.filter((r) => (now - r.modified_at) < THIRTY_DAYS);
-  const old = rows.filter((r) => (now - r.modified_at) >= THIRTY_DAYS);
+  // Score desc por faixa: cooldown de exibição e boosts de favorito
+  // determinam a prioridade; o ruído no score desempata.
+  const tiers: Array<typeof rows> = [recent, old, veryOld];
+  for (const tier of tiers) tier.sort((a, b) => b.score - a.score);
 
-  // Embaralha cada grupo para quebrar ordem cronológica
-  shuffle(recent);
-  shuffle(old);
+  // Cotas por faixa, com redistribuição dos slots não preenchidos
+  const quotas = [QUOTA_RECENT, QUOTA_OLD, QUOTA_VERY_OLD];
+  const selected: typeof rows = [];
+  for (let i = 0; i < tiers.length; i++) {
+    selected.push(...tiers[i].splice(0, quotas[i]));
+  }
+  let remaining = PAGE_SIZE - selected.length;
+  for (const tier of tiers) {
+    if (remaining <= 0) break;
+    const take = Math.min(remaining, tier.length);
+    selected.push(...tier.splice(0, take));
+    remaining -= take;
+  }
 
-  // Calcula quantos recentes e antigos pegar
-  const recentCount = Math.min(recent.length, Math.ceil(PAGE_SIZE * RECENT_RATIO));
-  const oldCount = Math.min(old.length, PAGE_SIZE - recentCount);
-
-  const selected = [...recent.slice(0, recentCount), ...old.slice(0, oldCount)];
-
-  // Embaralha novamente para misturar recentes e antigos
+  // Embaralha novamente para misturar as faixas
   shuffle(selected);
 
   // Aplica limite por perfil e álbum
@@ -377,6 +459,7 @@ function popPage(sessionId: string, session: FeedSession, filter: SqlFilter): Fe
 
   const items = hydrateBatch(rows);
   for (const r of rows) session.served.add(r.path);
+  recordShown(rows.map((r) => r.path));
   session.page++;
 
   return {

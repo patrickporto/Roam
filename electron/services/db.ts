@@ -127,6 +127,21 @@ function migrate(db: Database.Database) {
     `);
     db.pragma('user_version = 5');
   }
+
+  if (version < 8) {
+    // Memória de exibição do feed: anti-repetição entre sessões/ciclos
+    // via penalidade de cooldown no score. Linhas expiradas são podadas.
+    // Nota: a numeração pula para 8 porque versões experimentais locais
+    // (6/7: engagement/dismissals) já existem em bancos no wild — um gate
+    // `version < 6` nunca rodaria neles e a tabela ficaria faltando.
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS shown_history (
+        media_path TEXT PRIMARY KEY,
+        shown_at INTEGER NOT NULL
+      );
+    `);
+    db.pragma('user_version = 8');
+  }
 }
 
 export function closeDb() {
