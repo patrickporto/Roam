@@ -49,6 +49,9 @@ interface AppState {
   selectProfile: (rootPath: string | null) => void;
   profileMedia: MediaItem[];
   profileCursor: string | null | undefined;
+  /** Incrementado por selectProfile para invalidar fetches de mídia em voo
+   *  e forçar recarga mesmo quando o perfil re-selecionado é o mesmo. */
+  profileMediaEpoch: number;
   appendProfileMedia: (page: FeedPage) => void;
   clearProfileMedia: () => void;
 }
@@ -127,16 +130,18 @@ export const useStore = create<AppState>((set) => ({
   selectedProfile: null,
   selectedRoot: null,
   selectProfile: (profilePath) =>
-    set({
+    set((s) => ({
       selectedRoot: profilePath,
       selectedProfile: profilePath
-        ? useStore.getState().profileMap.get(profilePath) ?? null
+        ? s.profileMap.get(profilePath) ?? null
         : null,
       profileMedia: [],
       profileCursor: undefined,
-    }),
+      profileMediaEpoch: s.profileMediaEpoch + 1,
+    })),
   profileMedia: [],
   profileCursor: undefined,
+  profileMediaEpoch: 0,
   appendProfileMedia: (page) =>
     set((s) => ({
       profileMedia: [...s.profileMedia, ...page.items],
@@ -330,6 +335,7 @@ export function useProfileMedia(
 ) {
   const profileMedia = useStore((s) => s.profileMedia);
   const profileCursor = useStore((s) => s.profileCursor);
+  const mediaEpoch = useStore((s) => s.profileMediaEpoch);
   const appendProfileMedia = useStore((s) => s.appendProfileMedia);
   const [loading, setLoading] = useState(false);
   // Época invalida respostas em voo quando o escopo muda (ou desmonta):
@@ -358,10 +364,10 @@ export function useProfileMedia(
   }, [profilePath, albumPath, order, profileCursor, loading, appendProfileMedia]);
 
   useEffect(() => {
-    // reset on scope/order change
+    // reset on scope/order change ou re-seleção do perfil (ex.: refresh)
     epochRef.current++;
     useStore.getState().clearProfileMedia();
-  }, [profilePath, albumPath, order]);
+  }, [profilePath, albumPath, order, mediaEpoch]);
 
   useEffect(() => () => {
     epochRef.current++;

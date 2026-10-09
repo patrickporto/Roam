@@ -976,6 +976,22 @@ video.media-el {
   backdrop-filter: blur(6px);
 }
 
+.refresh-btn:disabled {
+  cursor: default;
+}
+
+.refresh-btn.refreshing {
+  color: var(--accent);
+}
+
+.refresh-btn.refreshing:hover {
+  transform: none;
+}
+
+.refresh-btn.refreshing svg {
+  animation: spin 1s linear infinite;
+}
+
 .section-title {
   font-size: 13px;
   font-weight: 700;

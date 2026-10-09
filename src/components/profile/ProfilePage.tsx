@@ -21,6 +21,8 @@ export function ProfilePage({ profilePath }: ProfilePageProps) {
   const [viewMode, setViewMode] = useState<'root' | 'albums'>('root');
   const [order, setOrder] = useState<SortOrder>('recommended');
   const [startItem, setStartItem] = useState<MediaItem | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const refreshFeed = useStore((s) => s.refreshFeed);
 
   const { profileMedia, loadNextPage, loading } = useProfileMedia(
     viewAlbum ? null : profilePath,
@@ -50,6 +52,41 @@ export function ProfilePage({ profilePath }: ProfilePageProps) {
   }, [profilePath, profile]);
 
   const { favFolders, toggleFolder } = useFavorites();
+
+  const handleRefresh = async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      const updated = await getApi().library.refreshProfile(profilePath);
+      if (!updated) {
+        // Pasta sumiu do disco: volta à biblioteca e recarrega a lista
+        selectProfile(null);
+        const all = await getApi().library.list();
+        setProfiles(all);
+        refreshFeed();
+        return;
+      }
+      // Lê a lista atual do store: o scan pode demorar e ela pode ter
+      // mudado durante o await
+      const current = useStore.getState().profiles;
+      const next = current.some((p) => p.profilePath === updated.profilePath)
+        ? current.map((p) =>
+            p.profilePath === updated.profilePath ? updated : p,
+          )
+        : [...current, updated];
+      // Atualiza a lista (profileMap) antes de re-selecionar,
+      // pois selectProfile lê os dados do profileMap.
+      setProfiles(next);
+      // Re-selecionar zera profileMedia/cursor e invalida fetches em voo;
+      // o hook recarrega a 1ª página
+      useStore.getState().selectProfile(updated.profilePath);
+      refreshFeed();
+    } catch (e) {
+      console.error('[ProfilePage] Refresh de perfil falhou', e);
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   if (!profile) {
     return (
@@ -180,6 +217,26 @@ export function ProfilePage({ profilePath }: ProfilePageProps) {
               strokeWidth="2"
             >
               <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" />
+            </svg>
+          </button>
+          <button
+            className={`fav-btn big refresh-btn ${refreshing ? 'refreshing' : ''}`}
+            onClick={handleRefresh}
+            disabled={refreshing}
+            title="Reindexar perfil"
+          >
+            <svg
+              width="22"
+              height="22"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <polyline points="23 4 23 10 17 10" />
+              <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
             </svg>
           </button>
         </div>
